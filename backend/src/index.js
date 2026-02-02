@@ -12,7 +12,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 
-import { authRoutes, adminRoutes, launcherRoutes, downloadRoutes } from './routes/index.js';
+import { authRoutes, adminRoutes, launcherRoutes, downloadRoutes, systemRoutes } from './routes/index.js';
 import versionsRoutes from './routes/versions.js';
 import filesRoutes from './routes/files.js';
 import { apiLimiter, errorHandler, notFoundHandler } from './middleware/index.js';
@@ -104,6 +104,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', apiLimiter, authRoutes);
 app.use('/api/launcher', apiLimiter, launcherRoutes);
 app.use('/api/admin', adminRoutes); // Admin ma własny rate limiter
+app.use('/api/admin/system', systemRoutes); // Zarządzanie systemem
 app.use('/api/download', downloadRoutes); // Download ma własny rate limiter
 app.use('/api/versions', apiLimiter, versionsRoutes); // Wersje MC/Forge/Fabric
 app.use('/api/files', filesRoutes); // Zarządzanie plikami (configs, resourcepacks, etc.)

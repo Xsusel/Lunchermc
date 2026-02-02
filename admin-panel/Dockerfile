@@ -11,8 +11,8 @@ WORKDIR /app
 # Kopiujemy pliki package
 COPY package*.json ./
 
-# Instalujemy zależności
-RUN npm ci
+# Instalujemy zależności (używamy npm install dla kompatybilności)
+RUN npm install
 
 # Kopiujemy kod źródłowy
 COPY . .

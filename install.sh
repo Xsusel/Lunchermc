@@ -164,8 +164,20 @@ mkdir -p $INSTALL_DIR/data/uploads/launcher
 mkdir -p $INSTALL_DIR/releases
 mkdir -p /var/www/certbot
 
-# Kopiuj pliki projektu
-cp -r . $INSTALL_DIR/
+# Kopiuj pliki projektu (tylko jeśli nie jesteśmy już w docelowym katalogu)
+CURRENT_DIR=$(pwd)
+RESOLVED_INSTALL_DIR=$(realpath -m "$INSTALL_DIR")
+RESOLVED_CURRENT_DIR=$(realpath -m "$CURRENT_DIR")
+
+if [ "$RESOLVED_CURRENT_DIR" != "$RESOLVED_INSTALL_DIR" ]; then
+    print_info "Kopiowanie plików projektu do $INSTALL_DIR..."
+    cp -r backend admin-panel launcher docker-compose.yml nginx README.md $INSTALL_DIR/ 2>/dev/null || true
+    # Kopiuj dodatkowe pliki jeśli istnieją
+    [ -f "CLAUDE.md" ] && cp CLAUDE.md $INSTALL_DIR/
+    [ -d "docs" ] && cp -r docs $INSTALL_DIR/
+else
+    print_info "Skrypt uruchomiony z katalogu instalacji - pomijam kopiowanie"
+fi
 
 print_success "Struktura katalogów utworzona"
 

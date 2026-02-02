@@ -13,6 +13,7 @@ import ModsPage from './pages/ModsPage';
 import ConfigPage from './pages/ConfigPage';
 import BroadcastsPage from './pages/BroadcastsPage';
 import LogsPage from './pages/LogsPage';
+import SystemPage from './pages/SystemPage';
 
 // Komponenty
 import Layout from './components/Layout';
@@ -73,6 +74,7 @@ function App() {
                 <Route path="config" element={<ConfigPage />} />
                 <Route path="broadcasts" element={<BroadcastsPage />} />
                 <Route path="logs" element={<LogsPage />} />
+                <Route path="system" element={<SystemPage />} />
             </Route>
 
             {/* Przekierowanie dla nieznanych tras */}

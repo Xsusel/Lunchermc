@@ -230,4 +230,48 @@ export const launcherVersionsApi = {
     }
 };
 
+export const systemApi = {
+    // Pobieranie statusu systemu
+    getStatus: async () => {
+        const response = await api.get('/admin/system/status');
+        return response.data;
+    },
+
+    // Sprawdzanie dostepnych aktualizacji
+    checkUpdates: async () => {
+        const response = await api.post('/admin/system/check-updates');
+        return response.data;
+    },
+
+    // Rozpoczecie aktualizacji
+    startUpdate: async () => {
+        const response = await api.post('/admin/system/update');
+        return response.data;
+    },
+
+    // Pobieranie logow aktualizacji
+    getUpdateLogs: async () => {
+        const response = await api.get('/admin/system/update-logs');
+        return response.data;
+    },
+
+    // Restart uslug
+    restart: async () => {
+        const response = await api.post('/admin/system/restart');
+        return response.data;
+    },
+
+    // Tworzenie backupu
+    createBackup: async () => {
+        const response = await api.post('/admin/system/backup');
+        return response.data;
+    },
+
+    // Lista backupow
+    getBackups: async () => {
+        const response = await api.get('/admin/system/backups');
+        return response.data;
+    }
+};
+
 export default api;

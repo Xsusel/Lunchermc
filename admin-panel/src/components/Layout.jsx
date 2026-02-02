@@ -13,7 +13,8 @@ import {
     LogOut,
     Menu,
     X,
-    Gamepad2
+    Gamepad2,
+    Server
 } from 'lucide-react';
 
 // Elementy nawigacji
@@ -23,7 +24,8 @@ const navItems = [
     { path: '/mods', label: 'Mody', icon: Package },
     { path: '/config', label: 'Konfiguracja', icon: Settings },
     { path: '/broadcasts', label: 'Powiadomienia', icon: Bell },
-    { path: '/logs', label: 'Logi', icon: FileText }
+    { path: '/logs', label: 'Logi', icon: FileText },
+    { path: '/system', label: 'System', icon: Server }
 ];
 
 function Layout() {
