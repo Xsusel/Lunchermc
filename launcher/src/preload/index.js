@@ -49,6 +49,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ============================================
     // URUCHAMIANIE GRY
     // ============================================
+    launchGame: (config) => ipcRenderer.invoke('launch-game', config),
+    killGame: () => ipcRenderer.send('kill-game'),
+    isGameRunning: () => ipcRenderer.invoke('is-game-running'),
+
+    // Wykrywanie Java
+    detectJava: () => ipcRenderer.invoke('detect-java'),
+    checkJava: (javaPath) => ipcRenderer.invoke('check-java', javaPath),
+
+    // Synchronizacja plikow
+    syncMods: (mods) => ipcRenderer.invoke('sync-mods', mods),
+    getFileHash: (filePath) => ipcRenderer.invoke('get-file-hash', filePath),
+    fileExists: (filePath) => ipcRenderer.invoke('file-exists', filePath),
+
+    // Eventy gry
     onGameOutput: (callback) => {
         ipcRenderer.on('game-output', (event, data) => callback(data));
     },
@@ -57,6 +71,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     onDownloadProgress: (callback) => {
         ipcRenderer.on('download-progress', (event, data) => callback(data));
+    },
+    onGameStatus: (callback) => {
+        ipcRenderer.on('game-status', (event, data) => callback(data));
     },
 
     // Usuwanie listenerów

@@ -73,6 +73,12 @@ export const dashboardApi = {
     getStats: async () => {
         const response = await api.get('/admin/dashboard');
         return response.data;
+    },
+
+    // Pobieranie statusu serwera MC
+    getServerStatus: async () => {
+        const response = await api.get('/launcher/server-status');
+        return response.data;
     }
 };
 

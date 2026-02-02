@@ -1,10 +1,10 @@
 /**
- * XsusLauncher - Moduł uruchamiania gry
- * Obsługuje pobieranie plików i uruchamianie Minecraft
+ * XsusLauncher - Modul uruchamiania gry
+ * Obsluguje pobieranie plikow i uruchamianie Minecraft
  */
 
 /**
- * Klasa zarządzająca uruchamianiem gry
+ * Klasa zarzadzajaca uruchamianiem gry
  */
 class GameLauncher {
     constructor() {
@@ -12,184 +12,187 @@ class GameLauncher {
         this.isLaunching = false;
         this.downloadProgress = 0;
         this.currentTask = '';
+        this.javaInstallations = [];
+
+        // Zarejestruj listenery
+        this.setupListeners();
     }
 
     /**
-     * Pobiera plik z URL z obsługą postępu
+     * Konfiguruje listenery eventow z main process
      */
-    async downloadFile(url, destPath, onProgress) {
-        return new Promise(async (resolve, reject) => {
-            try {
-                const response = await fetch(url);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+    setupListeners() {
+        // Postep pobierania
+        window.electronAPI.onDownloadProgress((data) => {
+            this.downloadProgress = data;
+            if (this.onProgressCallback) {
+                const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+                this.onProgressCallback(percent, data.name || data.task || 'Pobieranie...');
+            }
+        });
 
-                const contentLength = response.headers.get('content-length');
-                const total = parseInt(contentLength, 10);
-                let loaded = 0;
+        // Output z gry
+        window.electronAPI.onGameOutput((data) => {
+            console.log('[Minecraft]', data);
+            if (this.onGameOutputCallback) {
+                this.onGameOutputCallback(data);
+            }
+        });
 
-                const reader = response.body.getReader();
-                const chunks = [];
+        // Zamkniecie gry
+        window.electronAPI.onGameClose((code) => {
+            console.log('Game closed with code:', code);
+            this.isLaunching = false;
+            if (this.onGameCloseCallback) {
+                this.onGameCloseCallback(code);
+            }
+        });
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    chunks.push(value);
-                    loaded += value.length;
-
-                    if (onProgress && total) {
-                        onProgress(loaded, total);
-                    }
-                }
-
-                // Konwertujemy do Blob i zapisujemy
-                const blob = new Blob(chunks);
-                const buffer = await blob.arrayBuffer();
-
-                // Zapisz plik przez IPC (wymaga implementacji w main process)
-                // Na potrzeby demonstracji używamy localStorage do symulacji
-                resolve(buffer);
-            } catch (error) {
-                reject(error);
+        // Status gry
+        window.electronAPI.onGameStatus((data) => {
+            if (this.onStatusCallback) {
+                this.onStatusCallback(data.status);
             }
         });
     }
 
     /**
-     * Oblicza SHA256 pliku
+     * Wykrywa zainstalowane wersje Java
      */
-    async calculateSHA256(buffer) {
-        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    async detectJava() {
+        try {
+            this.javaInstallations = await window.electronAPI.detectJava();
+            return this.javaInstallations;
+        } catch (error) {
+            console.error('Error detecting Java:', error);
+            return [];
+        }
     }
 
     /**
-     * Przygotowuje i uruchamia grę
+     * Sprawdza czy Java jest dostepna
      */
-    async launch(config, settings, callbacks = {}) {
+    async checkJavaAvailable() {
+        const installations = await this.detectJava();
+        return installations.length > 0;
+    }
+
+    /**
+     * Pobiera najlepsza wersje Java dla danej wersji MC
+     */
+    getBestJavaForVersion(mcVersion) {
+        if (this.javaInstallations.length === 0) {
+            return null;
+        }
+
+        // Parse MC version
+        const parts = mcVersion.split('.');
+        const major = parseInt(parts[0]);
+        const minor = parseInt(parts[1] || 0);
+
+        // Wymagania Java dla roznych wersji MC
+        let requiredJava = 8;
+        if (major >= 1 && minor >= 20 && mcVersion.includes('.5')) {
+            requiredJava = 21;
+        } else if (major >= 1 && minor >= 18) {
+            requiredJava = 17;
+        } else if (major >= 1 && minor >= 17) {
+            requiredJava = 16;
+        }
+
+        // Znajdz kompatybilna wersje
+        const compatible = this.javaInstallations.filter(j => j.version >= requiredJava);
+
+        if (compatible.length > 0) {
+            return compatible[0];
+        }
+
+        // Zwroc najnowsza dostepna
+        return this.javaInstallations[0];
+    }
+
+    /**
+     * Przygotowuje i uruchamia gre
+     */
+    async launch(userConfig, settings, callbacks = {}) {
         const { onProgress, onStatusChange, onComplete, onError } = callbacks;
+
+        // Zapisz callbacki
+        this.onProgressCallback = onProgress;
+        this.onStatusCallback = onStatusChange;
 
         try {
             this.isLaunching = true;
 
-            // 1. Sprawdź pliki
-            onStatusChange?.('Sprawdzanie plików...');
-            onProgress?.(0, 'Analizowanie...');
+            // 1. Sprawdz Java
+            onStatusChange?.('Wykrywanie Java...');
+            onProgress?.(0, 'Sprawdzanie Java...');
 
-            // 2. Pobierz konfigurację z API
+            const javaAvailable = await this.checkJavaAvailable();
+            if (!javaAvailable) {
+                throw new Error('Nie znaleziono Java. Zainstaluj Java 17+ lub wskaż ścieżkę w ustawieniach.');
+            }
+
+            // 2. Pobierz konfiguracje z API
             onStatusChange?.('Pobieranie konfiguracji...');
+            onProgress?.(10, 'Pobieranie konfiguracji...');
+
             const launcherConfig = await api.getLauncherConfig();
 
             if (!launcherConfig.success) {
-                throw new Error('Nie można pobrać konfiguracji');
+                throw new Error('Nie można pobrać konfiguracji serwera');
             }
 
             const gameConfig = launcherConfig.data.config;
-            const mods = launcherConfig.data.mods;
+            const mods = launcherConfig.data.mods || [];
 
-            // Sprawdź tryb konserwacji
+            // Sprawdz tryb konserwacji
             if (gameConfig.maintenanceMode) {
                 throw new Error(gameConfig.maintenanceMessage || 'Serwer jest w trybie konserwacji');
             }
 
-            // 3. Przygotuj parametry gry
-            const gamePath = await window.electronAPI.getGamePath();
-            const ramSettings = settings.ram || { min: 2, max: 4 };
+            // 3. Przygotuj konfiguracje uruchomienia
+            const launchConfig = {
+                username: userConfig.username,
+                gameVersion: gameConfig.gameVersion,
+                loaderType: gameConfig.loaderType || 'vanilla',
+                forgeVersion: gameConfig.forgeVersion,
+                fabricVersion: gameConfig.fabricVersion,
+                serverIp: gameConfig.serverIp,
+                serverPort: gameConfig.serverPort || 25565,
+                mods: mods.filter(m => m.is_enabled)
+            };
 
-            // 4. Symulacja pobierania/sprawdzania plików
-            onStatusChange?.('Weryfikacja plików gry...');
+            // 4. Uruchom gre przez main process
+            onStatusChange?.('Uruchamianie gry...');
+            onProgress?.(20, 'Uruchamianie...');
 
-            // Symulujemy progress dla każdego moda
-            const totalMods = mods.length;
-            for (let i = 0; i < totalMods; i++) {
-                const mod = mods[i];
-                const progress = Math.round(((i + 1) / totalMods) * 100);
+            const result = await window.electronAPI.launchGame(launchConfig);
 
-                onProgress?.(progress, `Sprawdzanie: ${mod.name}`);
-
-                // Symulacja opóźnienia (w rzeczywistej implementacji tutaj byłoby pobieranie)
-                await new Promise(resolve => setTimeout(resolve, 100));
+            if (!result.success) {
+                throw new Error(result.error || 'Nie udało się uruchomić gry');
             }
 
-            onStatusChange?.('Przygotowywanie do uruchomienia...');
-            onProgress?.(100, 'Gotowe!');
-
-            // 5. Loguj uruchomienie gry
+            // Loguj uruchomienie na serwerze
             try {
                 await api.logGameStart();
             } catch (e) {
                 console.warn('Nie udało się zalogować uruchomienia gry:', e);
             }
 
-            // 6. Przygotuj argumenty uruchomienia
-            // W prawdziwej implementacji tutaj byłoby uruchomienie minecraft-launcher-core
-            const launchOptions = {
-                // Podstawowe
-                root: gamePath,
-                version: {
-                    number: gameConfig.gameVersion,
-                    type: gameConfig.loaderType
-                },
-
-                // Pamięć RAM
-                memory: {
-                    min: `${ramSettings.min}G`,
-                    max: `${ramSettings.max}G`
-                },
-
-                // Użytkownik (non-premium)
-                authorization: {
-                    access_token: '0',
-                    client_token: '0',
-                    uuid: this.generateOfflineUUID(config.username),
-                    name: config.username,
-                    user_properties: '{}'
-                },
-
-                // Automatyczne połączenie z serwerem!
-                server: {
-                    host: gameConfig.serverIp,
-                    port: gameConfig.serverPort
-                },
-
-                // Rozdzielczość
-                window: {
-                    width: settings.resolution?.width || 1280,
-                    height: settings.resolution?.height || 720,
-                    fullscreen: settings.resolution?.fullscreen || false
-                },
-
-                // Java
-                javaPath: settings.javaPath || undefined,
-                customArgs: settings.customJavaArgs ? settings.customJavaArgs.split(' ') : [],
-
-                // Loader (Forge/Fabric)
-                forge: gameConfig.loaderType === 'forge' ? gameConfig.forgeVersion : undefined,
-                fabric: gameConfig.loaderType === 'fabric' ? gameConfig.fabricVersion : undefined
-            };
-
-            onStatusChange?.('Uruchamianie gry...');
-
-            // W rzeczywistej implementacji tutaj byłoby:
-            // const { Client } = require('minecraft-launcher-core');
-            // const launcher = new Client();
-            // launcher.launch(launchOptions);
-
-            // Symulacja uruchomienia
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
+            onProgress?.(100, 'Gra uruchomiona!');
             onComplete?.({
                 success: true,
                 message: 'Gra została uruchomiona',
-                launchOptions
+                gamePath: result.gamePath,
+                javaPath: result.javaPath
             });
 
-            // Zamknij launcher jeśli ustawiono
+            // Zamknij launcher jesli ustawiono
             if (settings.closeOnLaunch) {
-                window.electronAPI.closeWindow();
+                setTimeout(() => {
+                    window.electronAPI.closeWindow();
+                }, 1000);
             }
 
         } catch (error) {
@@ -201,26 +204,47 @@ class GameLauncher {
     }
 
     /**
-     * Generuje UUID dla trybu offline (non-premium)
+     * Zatrzymuje gre
      */
-    generateOfflineUUID(username) {
-        // Generujemy UUID na podstawie nazwy użytkownika
-        const md5 = this.simpleHash(username);
-        return `${md5.slice(0, 8)}-${md5.slice(8, 12)}-${md5.slice(12, 16)}-${md5.slice(16, 20)}-${md5.slice(20, 32)}`;
+    killGame() {
+        window.electronAPI.killGame();
     }
 
     /**
-     * Prosty hash do generowania UUID
+     * Sprawdza czy gra jest uruchomiona
      */
-    simpleHash(str) {
+    async isGameRunning() {
+        return window.electronAPI.isGameRunning();
+    }
+
+    /**
+     * Ustawia callback dla output gry
+     */
+    setGameOutputCallback(callback) {
+        this.onGameOutputCallback = callback;
+    }
+
+    /**
+     * Ustawia callback dla zamkniecia gry
+     */
+    setGameCloseCallback(callback) {
+        this.onGameCloseCallback = callback;
+    }
+
+    /**
+     * Generuje UUID dla trybu offline (non-premium)
+     * Uzywane tylko jako fallback w rendererze
+     */
+    generateOfflineUUID(username) {
+        const str = `OfflinePlayer:${username}`;
         let hash = 0;
         for (let i = 0; i < str.length; i++) {
             const char = str.charCodeAt(i);
             hash = ((hash << 5) - hash) + char;
             hash = hash & hash;
         }
-        // Konwertuj do hex i uzupełnij do 32 znaków
-        return Math.abs(hash).toString(16).padStart(8, '0').repeat(4).slice(0, 32);
+        const hex = Math.abs(hash).toString(16).padStart(8, '0').repeat(4).slice(0, 32);
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
     }
 
     /**
@@ -231,5 +255,5 @@ class GameLauncher {
     }
 }
 
-// Eksportujemy instancję
+// Eksportujemy instancje
 const gameLauncher = new GameLauncher();

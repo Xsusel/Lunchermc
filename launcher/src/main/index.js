@@ -5,7 +5,16 @@
 const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
-const { autoUpdater } = require('electron-updater');
+const GameManager = require('./gameManager');
+
+// Auto-updater (opcjonalny)
+let autoUpdater;
+try {
+    autoUpdater = require('electron-updater').autoUpdater;
+} catch (e) {
+    console.warn('electron-updater not available');
+    autoUpdater = null;
+}
 
 // Konfiguracja przechowywania ustawień
 const store = new Store({
@@ -41,6 +50,7 @@ const store = new Store({
 
 // Referencja do głównego okna
 let mainWindow = null;
+let gameManager = null;
 
 // Ścieżka do danych gry
 const getDefaultGamePath = () => {
@@ -80,7 +90,7 @@ function createWindow() {
         mainWindow.show();
 
         // Sprawdź aktualizacje w tle
-        if (store.get('autoUpdate') && process.env.NODE_ENV !== 'development') {
+        if (autoUpdater && store.get('autoUpdate') && process.env.NODE_ENV !== 'development') {
             autoUpdater.checkForUpdatesAndNotify();
         }
     });
@@ -93,7 +103,12 @@ function createWindow() {
     // Obsługa zamknięcia okna
     mainWindow.on('closed', () => {
         mainWindow = null;
+        gameManager = null;
     });
+
+    // Inicjalizuj GameManager
+    gameManager = new GameManager(store, mainWindow);
+    gameManager.registerIPCHandlers();
 }
 
 // ============================================
@@ -205,19 +220,30 @@ app.on('window-all-closed', () => {
 // AUTO-UPDATE
 // ============================================
 
-autoUpdater.on('update-available', () => {
-    mainWindow?.webContents.send('update-available');
-});
+if (autoUpdater) {
+    autoUpdater.on('update-available', () => {
+        mainWindow?.webContents.send('update-available');
+    });
 
-autoUpdater.on('update-downloaded', () => {
-    mainWindow?.webContents.send('update-downloaded');
-});
+    autoUpdater.on('update-downloaded', () => {
+        mainWindow?.webContents.send('update-downloaded');
+    });
 
-autoUpdater.on('error', (error) => {
-    console.error('Auto-update error:', error);
-});
+    autoUpdater.on('error', (error) => {
+        console.error('Auto-update error:', error);
+    });
 
-// Instalacja aktualizacji na żądanie
-ipcMain.on('install-update', () => {
-    autoUpdater.quitAndInstall();
+    // Instalacja aktualizacji na żądanie
+    ipcMain.on('install-update', () => {
+        autoUpdater.quitAndInstall();
+    });
+}
+
+// ============================================
+// DODATKOWE HANDLERY IPC
+// ============================================
+
+// Sprawdzenie statusu gry
+ipcMain.handle('is-game-running', () => {
+    return gameManager ? gameManager.gameProcess !== null : false;
 });

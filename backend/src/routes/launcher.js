@@ -7,6 +7,12 @@ import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog } from '../mod
 import { authenticateUser, optionalAuth } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getClientIp } from '../utils/helpers.js';
+import { pingMinecraftServer, simplePing } from '../utils/mcPing.js';
+
+// Cache dla statusu serwera (odswiezany co 30 sekund)
+let serverStatusCache = null;
+let serverStatusCacheTime = 0;
+const CACHE_TTL = 30000; // 30 sekund
 
 const router = Router();
 
@@ -100,17 +106,69 @@ router.post('/game-start',
 /**
  * GET /api/launcher/server-status
  * Sprawdza status serwera Minecraft
- * (prosty endpoint - w przyszłości można rozbudować o rzeczywiste sprawdzanie)
+ * Pinguje serwer MC i zwraca informacje o graczach online
  */
 router.get('/server-status', asyncHandler(async (req, res) => {
     const config = GameConfig.getPublicConfig();
+    const now = Date.now();
+
+    // Sprawdz cache
+    if (serverStatusCache && (now - serverStatusCacheTime) < CACHE_TTL) {
+        return res.json({
+            success: true,
+            data: {
+                ...serverStatusCache,
+                cached: true,
+                maintenanceMode: config.maintenanceMode,
+                maintenanceMessage: config.maintenanceMessage
+            }
+        });
+    }
+
+    // Ping serwera MC
+    let serverData = {
+        ip: config.serverIp,
+        port: config.serverPort,
+        online: false,
+        players: { online: 0, max: 0, sample: [] },
+        version: null,
+        latency: null,
+        description: null
+    };
+
+    try {
+        if (config.serverIp && !config.maintenanceMode) {
+            const pingResult = await pingMinecraftServer(
+                config.serverIp,
+                config.serverPort || 25565,
+                5000
+            );
+
+            if (pingResult.online) {
+                serverData = {
+                    ip: config.serverIp,
+                    port: config.serverPort,
+                    online: true,
+                    players: pingResult.players || { online: 0, max: 0, sample: [] },
+                    version: pingResult.version,
+                    latency: pingResult.latency,
+                    description: pingResult.description
+                };
+            }
+        }
+    } catch (error) {
+        console.error('Error pinging MC server:', error);
+    }
+
+    // Zapisz do cache
+    serverStatusCache = serverData;
+    serverStatusCacheTime = now;
 
     res.json({
         success: true,
         data: {
-            ip: config.serverIp,
-            port: config.serverPort,
-            online: !config.maintenanceMode,
+            ...serverData,
+            cached: false,
             maintenanceMode: config.maintenanceMode,
             maintenanceMessage: config.maintenanceMessage
         }
