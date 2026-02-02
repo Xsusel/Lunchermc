@@ -35,5 +35,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Eksponujemy port
 EXPOSE 80
 
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget -q --spider http://localhost:80/ || exit 1
+
 # Uruchamiamy Nginx
 CMD ["nginx", "-g", "daemon off;"]
