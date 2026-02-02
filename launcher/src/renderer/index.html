@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:;">
+    <title>XsusLauncher</title>
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Pasek tytułowy (własna ramka) -->
+        <header class="titlebar" id="titlebar">
+            <div class="titlebar-drag">
+                <div class="titlebar-logo">
+                    <img src="../../assets/icon.png" alt="Logo" class="logo-img" onerror="this.style.display='none'">
+                    <span class="logo-text">XsusLauncher</span>
+                </div>
+            </div>
+            <div class="titlebar-controls">
+                <button class="titlebar-btn" id="btn-minimize" title="Minimalizuj">
+                    <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="2" fill="currentColor"/></svg>
+                </button>
+                <button class="titlebar-btn" id="btn-maximize" title="Maksymalizuj">
+                    <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                </button>
+                <button class="titlebar-btn titlebar-close" id="btn-close" title="Zamknij">
+                    <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1L11 11M11 1L1 11" stroke="currentColor" stroke-width="2"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Główna zawartość -->
+        <main class="main-content">
+            <!-- Nawigacja boczna -->
+            <nav class="sidebar">
+                <div class="nav-items">
+                    <button class="nav-item active" data-page="home">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                            <polyline points="9 22 9 12 15 12 15 22"/>
+                        </svg>
+                        <span>Strona główna</span>
+                    </button>
+                    <button class="nav-item" data-page="settings">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                        <span>Ustawienia</span>
+                    </button>
+                </div>
+
+                <!-- Informacje użytkownika -->
+                <div class="user-info" id="user-info">
+                    <div class="user-avatar" id="user-avatar">?</div>
+                    <div class="user-details">
+                        <span class="user-name" id="user-name">Niezalogowany</span>
+                        <span class="user-status" id="user-status">Kliknij aby się zalogować</span>
+                    </div>
+                </div>
+            </nav>
+
+            <!-- Obszar zawartości -->
+            <div class="content-area">
+                <!-- Strona główna -->
+                <section class="page active" id="page-home">
+                    <!-- Powiadomienia -->
+                    <div class="broadcasts-container" id="broadcasts-container"></div>
+
+                    <!-- Informacje o serwerze -->
+                    <div class="server-info">
+                        <div class="server-card">
+                            <div class="server-status">
+                                <div class="status-indicator online" id="server-status-indicator"></div>
+                                <div class="server-details">
+                                    <h2 class="server-name">Serwer Xsus</h2>
+                                    <p class="server-address" id="server-address">Ładowanie...</p>
+                                </div>
+                            </div>
+                            <div class="game-version">
+                                <span class="version-label">Wersja:</span>
+                                <span class="version-value" id="game-version">---</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Przycisk graj -->
+                    <div class="play-section">
+                        <div class="progress-container" id="progress-container" style="display: none;">
+                            <div class="progress-info">
+                                <span class="progress-text" id="progress-text">Przygotowywanie...</span>
+                                <span class="progress-percent" id="progress-percent">0%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progress-fill"></div>
+                            </div>
+                            <p class="progress-details" id="progress-details"></p>
+                        </div>
+
+                        <button class="play-button" id="btn-play" disabled>
+                            <span class="play-text">GRAJ</span>
+                            <span class="play-subtext" id="play-subtext">Zaloguj się aby grać</span>
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Strona ustawień -->
+                <section class="page" id="page-settings">
+                    <h1 class="page-title">Ustawienia</h1>
+
+                    <div class="settings-grid">
+                        <!-- Ustawienia pamięci RAM -->
+                        <div class="settings-card">
+                            <h3 class="settings-card-title">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="settings-icon">
+                                    <rect x="2" y="6" width="20" height="12" rx="2"/>
+                                    <path d="M6 12h.01M10 12h.01M14 12h.01M18 12h.01"/>
+                                </svg>
+                                Pamięć RAM
+                            </h3>
+
+                            <div class="setting-item">
+                                <label>Minimalna pamięć (GB)</label>
+                                <div class="slider-container">
+                                    <input type="range" id="ram-min" min="1" max="16" value="2" class="slider">
+                                    <span class="slider-value" id="ram-min-value">2 GB</span>
+                                </div>
+                            </div>
+
+                            <div class="setting-item">
+                                <label>Maksymalna pamięć (GB)</label>
+                                <div class="slider-container">
+                                    <input type="range" id="ram-max" min="2" max="32" value="4" class="slider">
+                                    <span class="slider-value" id="ram-max-value">4 GB</span>
+                                </div>
+                            </div>
+
+                            <p class="setting-hint" id="ram-hint">Zalecane: 4-8 GB dla modów</p>
+                        </div>
+
+                        <!-- Ustawienia Java -->
+                        <div class="settings-card">
+                            <h3 class="settings-card-title">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="settings-icon">
+                                    <polyline points="16 18 22 12 16 6"/>
+                                    <polyline points="8 6 2 12 8 18"/>
+                                </svg>
+                                Java
+                            </h3>
+
+                            <div class="setting-item">
+                                <label>Ścieżka do Java</label>
+                                <div class="path-input">
+                                    <input type="text" id="java-path" readonly placeholder="Automatyczna detekcja">
+                                    <button class="btn-browse" id="btn-java-browse">Przeglądaj</button>
+                                </div>
+                            </div>
+
+                            <div class="setting-item">
+                                <label>Dodatkowe argumenty JVM</label>
+                                <input type="text" id="custom-java-args" class="text-input" placeholder="-XX:+UseG1GC">
+                            </div>
+                        </div>
+
+                        <!-- Ustawienia rozdzielczości -->
+                        <div class="settings-card">
+                            <h3 class="settings-card-title">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="settings-icon">
+                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                                    <line x1="8" y1="21" x2="16" y2="21"/>
+                                    <line x1="12" y1="17" x2="12" y2="21"/>
+                                </svg>
+                                Rozdzielczość
+                            </h3>
+
+                            <div class="setting-item inline">
+                                <div>
+                                    <label>Szerokość</label>
+                                    <input type="number" id="res-width" class="num-input" value="1280" min="800">
+                                </div>
+                                <span class="separator">x</span>
+                                <div>
+                                    <label>Wysokość</label>
+                                    <input type="number" id="res-height" class="num-input" value="720" min="600">
+                                </div>
+                            </div>
+
+                            <div class="setting-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="fullscreen">
+                                    <span class="checkmark"></span>
+                                    Pełny ekran
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Ustawienia launchera -->
+                        <div class="settings-card">
+                            <h3 class="settings-card-title">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="settings-icon">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                </svg>
+                                Launcher
+                            </h3>
+
+                            <div class="setting-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="close-on-launch">
+                                    <span class="checkmark"></span>
+                                    Zamknij launcher po uruchomieniu gry
+                                </label>
+                            </div>
+
+                            <div class="setting-item checkbox-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="auto-update" checked>
+                                    <span class="checkmark"></span>
+                                    Automatyczne aktualizacje
+                                </label>
+                            </div>
+
+                            <div class="setting-item">
+                                <label>Folder gry</label>
+                                <div class="path-input">
+                                    <input type="text" id="game-path" readonly placeholder="Domyślny">
+                                    <button class="btn-browse" id="btn-game-browse">Przeglądaj</button>
+                                </div>
+                                <button class="btn-secondary" id="btn-open-folder" style="margin-top: 8px;">
+                                    Otwórz folder gry
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Przyciski akcji -->
+                    <div class="settings-actions">
+                        <button class="btn-secondary" id="btn-reset-settings">Przywróć domyślne</button>
+                        <button class="btn-primary" id="btn-save-settings">Zapisz ustawienia</button>
+                    </div>
+
+                    <!-- Info o wersji -->
+                    <div class="version-info">
+                        <p>XsusLauncher v<span id="launcher-version">1.0.0</span></p>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- Modal logowania -->
+        <div class="modal" id="login-modal">
+            <div class="modal-content">
+                <button class="modal-close" id="modal-close">&times;</button>
+                <h2 class="modal-title">Logowanie</h2>
+
+                <form id="login-form">
+                    <div class="form-group">
+                        <label for="login-username">Nick w grze</label>
+                        <input type="text" id="login-username" placeholder="TwójNick" required
+                               minlength="3" maxlength="16" pattern="[a-zA-Z0-9_]+">
+                        <p class="input-hint">3-16 znaków, litery, cyfry i podkreślenia</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="login-password">Hasło</label>
+                        <input type="password" id="login-password" placeholder="••••••••" required minlength="6">
+                    </div>
+
+                    <div class="form-group checkbox-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="remember-me" checked>
+                            <span class="checkmark"></span>
+                            Zapamiętaj mnie
+                        </label>
+                    </div>
+
+                    <div class="form-error" id="login-error"></div>
+
+                    <button type="submit" class="btn-primary btn-login" id="btn-login">
+                        Zaloguj się
+                    </button>
+                </form>
+
+                <div class="modal-footer">
+                    <p>Nie masz konta? <a href="#" id="link-register">Zarejestruj się</a></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal rejestracji -->
+        <div class="modal" id="register-modal">
+            <div class="modal-content">
+                <button class="modal-close" id="register-modal-close">&times;</button>
+                <h2 class="modal-title">Rejestracja</h2>
+
+                <form id="register-form">
+                    <div class="form-group">
+                        <label for="register-username">Nick w grze</label>
+                        <input type="text" id="register-username" placeholder="TwójNick" required
+                               minlength="3" maxlength="16" pattern="[a-zA-Z0-9_]+">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="register-password">Hasło</label>
+                        <input type="password" id="register-password" placeholder="••••••••" required minlength="6">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="register-password-confirm">Potwierdź hasło</label>
+                        <input type="password" id="register-password-confirm" placeholder="••••••••" required minlength="6">
+                    </div>
+
+                    <div class="form-error" id="register-error"></div>
+
+                    <button type="submit" class="btn-primary btn-login">
+                        Zarejestruj się
+                    </button>
+                </form>
+
+                <div class="modal-footer">
+                    <p>Masz już konto? <a href="#" id="link-login">Zaloguj się</a></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast notifications -->
+        <div class="toast-container" id="toast-container"></div>
+    </div>
+
+    <script src="scripts/api.js"></script>
+    <script src="scripts/game.js"></script>
+    <script src="scripts/app.js"></script>
+</body>
+</html>
