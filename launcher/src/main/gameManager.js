@@ -352,12 +352,9 @@ class GameManager {
     }
 
     /**
-     * Synchronizuje mody z serwerem
+     * Synchronizuje pliki z serwerem
      */
-    async syncMods(mods, gamePath) {
-        const modsDir = path.join(gamePath, 'mods');
-        this.ensureDir(modsDir);
-
+    async syncFiles(files, gamePath) {
         const results = {
             downloaded: [],
             skipped: [],
@@ -365,24 +362,23 @@ class GameManager {
             errors: []
         };
 
-        // Pobierz listę istniejących modów
-        const existingMods = new Set();
-        if (fs.existsSync(modsDir)) {
-            fs.readdirSync(modsDir).forEach(f => existingMods.add(f));
-        }
-
-        const totalMods = mods.length;
+        const totalFiles = files.length;
         let processed = 0;
 
-        for (const mod of mods) {
+        for (const file of files) {
             processed++;
-            const modPath = path.join(modsDir, mod.filename);
+            // Użyj file.path jeśli dostępny (nowy format), w przeciwnym razie mods/filename (stary format)
+            const relativePath = file.path || `mods/${file.filename}`;
+            const destPath = path.join(gamePath, relativePath);
+
+            // Upewnij się że folder istnieje
+            this.ensureDir(path.dirname(destPath));
 
             this.sendToRenderer('download-progress', {
-                type: 'mod',
-                name: mod.name,
+                type: 'file',
+                name: file.filename || path.basename(destPath),
                 current: processed,
-                total: totalMods,
+                total: totalFiles,
                 status: 'checking'
             });
 
@@ -390,50 +386,41 @@ class GameManager {
                 let needsDownload = true;
 
                 // Sprawdź czy plik istnieje i ma prawidłowy hash
-                if (fs.existsSync(modPath)) {
-                    const hash = await this.calculateFileHash(modPath);
-                    if (hash === mod.sha256) {
+                if (fs.existsSync(destPath)) {
+                    const hash = await this.calculateFileHash(destPath);
+                    if (hash === file.sha256) {
                         needsDownload = false;
-                        results.skipped.push(mod.filename);
+                        results.skipped.push(file.filename);
                     }
                 }
 
                 if (needsDownload) {
                     this.sendToRenderer('download-progress', {
-                        type: 'mod',
-                        name: mod.name,
+                        type: 'file',
+                        name: file.filename || path.basename(destPath),
                         current: processed,
-                        total: totalMods,
+                        total: totalFiles,
                         status: 'downloading'
                     });
 
-                    await this.downloadFile(mod.url, modPath, (downloaded, total) => {
+                    await this.downloadFile(file.url, destPath, (downloaded, total) => {
                         this.sendToRenderer('download-progress', {
-                            type: 'mod',
-                            name: mod.name,
+                            type: 'file',
+                            name: file.filename || path.basename(destPath),
                             current: processed,
-                            total: totalMods,
+                            total: totalFiles,
                             status: 'downloading',
                             bytes: downloaded,
                             totalBytes: total
                         });
                     });
 
-                    results.downloaded.push(mod.filename);
+                    results.downloaded.push(file.filename);
                 }
-
-                existingMods.delete(mod.filename);
             } catch (error) {
-                results.errors.push({ filename: mod.filename, error: error.message });
+                results.errors.push({ filename: file.filename, error: error.message });
             }
         }
-
-        // Usuń nieużywane mody (opcjonalnie)
-        // for (const oldMod of existingMods) {
-        //     const oldPath = path.join(modsDir, oldMod);
-        //     fs.unlinkSync(oldPath);
-        //     results.removed.push(oldMod);
-        // }
 
         return results;
     }
@@ -474,15 +461,18 @@ class GameManager {
                 throw new Error(`Nie znaleziono Java w: ${javaPath}`);
             }
 
-            // Synchronizuj mody
-            this.sendToRenderer('game-status', { status: 'Synchronizacja modów...' });
+            // Synchronizuj pliki (preferuj config.files, fallback do config.mods)
+            this.sendToRenderer('game-status', { status: 'Synchronizacja plików...' });
 
-            if (config.mods && config.mods.length > 0) {
-                const syncResult = await this.syncMods(config.mods, gamePath);
-                console.log('Mods sync result:', syncResult);
+            const filesToSync = config.files || config.mods || [];
+            if (filesToSync.length > 0) {
+                // Jeśli używamy starego config.mods, musimy zapewnić kompatybilność
+                // syncFiles obsługuje to przez fallback do mods/filename
+                const syncResult = await this.syncFiles(filesToSync, gamePath);
+                console.log('Files sync result:', syncResult);
 
                 if (syncResult.errors.length > 0) {
-                    console.warn('Some mods failed to download:', syncResult.errors);
+                    console.warn('Some files failed to download:', syncResult.errors);
                 }
             }
 
@@ -564,11 +554,15 @@ class GameManager {
                 // Uruchom
                 this.gameProcess = await launcher.launch(launchOpts);
 
-                this.gameProcess.on('close', (code) => {
-                    this.sendToRenderer('game-close', code);
-                    this.gameProcess = null;
-                    this.isLaunching = false;
-                });
+                if (this.gameProcess) {
+                    this.gameProcess.on('close', (code) => {
+                        this.sendToRenderer('game-close', code);
+                        this.gameProcess = null;
+                        this.isLaunching = false;
+                    });
+                } else {
+                    console.error('Game process is null after launch!');
+                }
 
             } else {
                 // Fallback - uruchom bez minecraft-launcher-core
@@ -649,7 +643,7 @@ class GameManager {
         // Synchronizacja modów
         ipcMain.handle('sync-mods', async (event, mods) => {
             const gamePath = this.getGamePath();
-            return this.syncMods(mods, gamePath);
+            return this.syncFiles(mods, gamePath);
         });
 
         // Pobierz hash pliku
