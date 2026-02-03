@@ -69,6 +69,11 @@ app.set('trust proxy', 1);
 ensureDir(getUploadsPath());
 ensureDir(getModsPath());
 ensureDir(path.join(getUploadsPath(), 'launcher'));
+ensureDir(path.join(getUploadsPath(), 'datapacks'));
+ensureDir(path.join(getUploadsPath(), 'defaultconfigs'));
+ensureDir(path.join(getUploadsPath(), 'resourcepacks'));
+ensureDir(path.join(getUploadsPath(), 'shaderpacks'));
+ensureDir(path.join(getUploadsPath(), 'configs'));
 ensureDir(path.join(__dirname, '../data'));
 
 // ============================================

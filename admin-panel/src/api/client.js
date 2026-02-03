@@ -183,27 +183,33 @@ export const modsApi = {
 export const filesApi = {
     // Lista plików
     getAll: async (type) => {
-        const response = await api.get(`/admin/files?type=${type}`);
+        const response = await api.get(`/files/admin/list/${type}`);
         return response.data;
     },
 
     // Dodawanie pliku
     upload: async (type, formData) => {
-        const response = await api.post(`/admin/files?type=${type}`, formData, {
+        const response = await api.post(`/files/admin/upload/${type}`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
         });
         return response.data;
     },
 
     // Przełączanie statusu
-    toggle: async (id) => {
-        const response = await api.post(`/admin/files/${id}/toggle`);
+    toggle: async (id, type) => {
+        const response = await api.put(`/files/admin/${type}/${id}/toggle`);
         return response.data;
     },
 
     // Usuwanie pliku
-    delete: async (id) => {
-        const response = await api.delete(`/admin/files/${id}`);
+    delete: async (id, type) => {
+        const response = await api.delete(`/files/admin/${type}/${id}`);
+        return response.data;
+    },
+
+    // Synchronizacja
+    sync: async () => {
+        const response = await api.post('/files/admin/sync');
         return response.data;
     }
 };

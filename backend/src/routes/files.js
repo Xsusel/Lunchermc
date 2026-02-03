@@ -26,7 +26,7 @@ const FILES_BASE_PATH = path.join(__dirname, '../../uploads');
 const FILE_TYPES = {
     datapacks: { folder: 'datapacks', extensions: ['.zip', '.json', '.mcfunction'] },
     defaultconfigs: { folder: 'defaultconfigs', extensions: ['.json', '.toml', '.cfg', '.properties', '.txt', '.yaml', '.yml'] },
-    configs: { folder: 'config', extensions: ['.json', '.toml', '.cfg', '.properties', '.txt', '.yaml', '.yml'] },
+    configs: { folder: 'configs', extensions: ['.json', '.toml', '.cfg', '.properties', '.txt', '.yaml', '.yml'] },
     resourcepacks: { folder: 'resourcepacks', extensions: ['.zip'] },
     shaderpacks: { folder: 'shaderpacks', extensions: ['.zip'] },
     scripts: { folder: 'scripts', extensions: ['.zs', '.js'] }
