@@ -376,8 +376,13 @@ function updateUserUI() {
         elements.userName.textContent = state.user.username;
         elements.userStatus.textContent = 'Kliknij aby się wylogować';
         elements.userAvatar.textContent = state.user.username[0].toUpperCase();
-        elements.btnPlay.disabled = false;
-        elements.playSubtext.textContent = 'Kliknij aby rozpocząć';
+        elements.btnPlay.disabled = !state.serverOnline;
+
+        if (state.serverOnline) {
+            elements.playSubtext.textContent = 'Kliknij aby rozpocząć';
+        } else {
+            elements.playSubtext.textContent = 'Serwer niedostępny';
+        }
     } else {
         elements.userName.textContent = 'Niezalogowany';
         elements.userStatus.textContent = 'Kliknij aby się zalogować';
@@ -492,6 +497,9 @@ async function loadServerStatus() {
                 elements.serverStatusIndicator.className = 'status-indicator offline';
                 state.serverOnline = false;
             }
+
+            // Aktualizuj przycisk graj
+            updateUserUI();
         }
     } catch (error) {
         console.error('Błąd pobierania statusu serwera:', error);
@@ -579,17 +587,41 @@ async function handlePlay() {
                     elements.btnPlay.disabled = false;
                 },
                 onError: (error) => {
-                    showToast(error, 'error');
+                    showToast(translateError(error), 'error');
                     elements.progressContainer.style.display = 'none';
                     elements.btnPlay.disabled = false;
                 }
             }
         );
     } catch (error) {
-        showToast(error.message, 'error');
+        showToast(translateError(error.message), 'error');
         elements.progressContainer.style.display = 'none';
         elements.btnPlay.disabled = false;
     }
+}
+
+/**
+ * Tłumaczy komunikaty błędów na bardziej przyjazne
+ */
+function translateError(error) {
+    const translations = {
+        'Nie znaleziono Java': 'Nie znaleziono Java. Zainstaluj Java 17 lub nowszą.',
+        'Brak połączenia z serwerem': 'Brak połączenia z serwerem. Sprawdź połączenie internetowe.',
+        'Network Error': 'Błąd sieci. Sprawdź połączenie internetowe.',
+        'Failed to fetch': 'Nie można połączyć z serwerem.',
+        'Connection timeout': 'Przekroczono czas oczekiwania na połączenie.',
+        'Serwer jest w trybie konserwacji': 'Serwer jest w trybie konserwacji. Spróbuj później.',
+        'Nie można pobrać konfiguracji serwera': 'Nie można pobrać konfiguracji. Spróbuj ponownie.',
+        'Download timeout': 'Pobieranie trwało za długo. Spróbuj ponownie.'
+    };
+
+    for (const [key, value] of Object.entries(translations)) {
+        if (error && error.includes(key)) {
+            return value;
+        }
+    }
+
+    return error || 'Wystąpił nieoczekiwany błąd';
 }
 
 /**
