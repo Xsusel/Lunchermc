@@ -8,6 +8,7 @@ import { authenticateUser, optionalAuth } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getClientIp } from '../utils/helpers.js';
 import { pingMinecraftServer, simplePing } from '../utils/mcPing.js';
+import db from '../config/database.js';
 
 // Cache dla statusu serwera (odswiezany co 30 sekund)
 let serverStatusCache = null;
@@ -26,11 +27,41 @@ router.get('/config', asyncHandler(async (req, res) => {
     const mods = Mod.getForLauncher();
     const broadcasts = Broadcast.getActive();
 
+    // Pobierz inne pliki (datapacks, configs, etc.)
+    const otherFiles = db.prepare(`
+        SELECT file_type, filename, relative_path, url, sha256, file_size, is_required
+        FROM game_files_extended
+        WHERE is_enabled = 1
+    `).all();
+
+    // Połącz wszystko w jedną listę plików
+    const files = [
+        ...mods.map(m => ({
+            type: 'mod',
+            path: `mods/${m.filename}`,
+            filename: m.filename,
+            url: m.url,
+            sha256: m.sha256,
+            size: m.fileSize,
+            required: m.required
+        })),
+        ...otherFiles.map(f => ({
+            type: f.file_type,
+            path: f.relative_path,
+            filename: f.filename,
+            url: f.url || `/api/files/download/${f.file_type}/${f.filename}`,
+            sha256: f.sha256,
+            size: f.file_size,
+            required: !!f.is_required
+        }))
+    ];
+
     res.json({
         success: true,
         data: {
             config,
-            mods,
+            mods, // Zachowujemy dla kompatybilności wstecznej
+            files, // Nowa zunifikowana lista
             broadcasts,
             // Metadane dla launchera
             meta: {
