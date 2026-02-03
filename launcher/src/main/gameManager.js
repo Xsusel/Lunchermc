@@ -379,9 +379,9 @@ class GameManager {
     }
 
     /**
-     * Pobiera plik z URL
+     * Pobiera plik z URL z obsługą retry
      */
-    downloadFile(url, destPath, onProgress) {
+    downloadFile(url, destPath, onProgress, retries = 3) {
         return new Promise((resolve, reject) => {
             this.ensureDir(path.dirname(destPath));
 
@@ -392,56 +392,92 @@ class GameManager {
                 return;
             }
 
-            const protocol = fullUrl.startsWith('https') ? https : http;
-            const file = fs.createWriteStream(destPath);
+            const attemptDownload = (attemptsLeft) => {
+                const protocol = fullUrl.startsWith('https') ? https : http;
+                const file = fs.createWriteStream(destPath);
+                let downloadedBytes = 0;
 
-            const request = protocol.get(fullUrl, (response) => {
-                // Obsługa przekierowań
-                if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                const request = protocol.get(fullUrl, (response) => {
+                    // Obsługa przekierowań
+                    if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                        file.close();
+                        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                        return this.downloadFile(response.headers.location, destPath, onProgress, attemptsLeft)
+                            .then(resolve)
+                            .catch(reject);
+                    }
+
+                    if (response.statusCode !== 200) {
+                        file.close();
+                        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+
+                        if (attemptsLeft > 1) {
+                            console.log(`HTTP ${response.statusCode}, retrying... (${attemptsLeft - 1} attempts left)`);
+                            setTimeout(() => attemptDownload(attemptsLeft - 1), 1000);
+                        } else {
+                            reject(new Error(`HTTP ${response.statusCode}`));
+                        }
+                        return;
+                    }
+
+                    const totalSize = parseInt(response.headers['content-length'] || '0', 10);
+
+                    response.on('data', (chunk) => {
+                        downloadedBytes += chunk.length;
+                        if (onProgress && totalSize > 0) {
+                            onProgress(downloadedBytes, totalSize);
+                        }
+                    });
+
+                    response.pipe(file);
+
+                    file.on('finish', () => {
+                        file.close();
+                        resolve(destPath);
+                    });
+
+                    file.on('error', (err) => {
+                        file.close();
+                        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+
+                        if (attemptsLeft > 1) {
+                            console.log(`File write error, retrying... (${attemptsLeft - 1} attempts left)`);
+                            setTimeout(() => attemptDownload(attemptsLeft - 1), 1000);
+                        } else {
+                            reject(err);
+                        }
+                    });
+                });
+
+                request.on('error', (err) => {
                     file.close();
-                    fs.unlinkSync(destPath);
-                    return this.downloadFile(response.headers.location, destPath, onProgress)
-                        .then(resolve)
-                        .catch(reject);
-                }
+                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
 
-                if (response.statusCode !== 200) {
-                    file.close();
-                    fs.unlinkSync(destPath);
-                    reject(new Error(`HTTP ${response.statusCode}`));
-                    return;
-                }
-
-                const totalSize = parseInt(response.headers['content-length'] || '0', 10);
-                let downloaded = 0;
-
-                response.on('data', (chunk) => {
-                    downloaded += chunk.length;
-                    if (onProgress && totalSize > 0) {
-                        onProgress(downloaded, totalSize);
+                    if (attemptsLeft > 1) {
+                        console.log(`Download error: ${err.message}, retrying... (${attemptsLeft - 1} attempts left)`);
+                        setTimeout(() => attemptDownload(attemptsLeft - 1), 2000);
+                    } else {
+                        reject(err);
                     }
                 });
 
-                response.pipe(file);
-
-                file.on('finish', () => {
+                // Timeout zależny od rozmiaru - minimum 60 sekund, więcej dla dużych plików
+                const timeout = Math.max(60000, 120000); // 60-120 sekund
+                request.setTimeout(timeout, () => {
+                    request.destroy();
                     file.close();
-                    resolve(destPath);
+                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+
+                    if (attemptsLeft > 1) {
+                        console.log(`Download timeout, retrying... (${attemptsLeft - 1} attempts left)`);
+                        setTimeout(() => attemptDownload(attemptsLeft - 1), 2000);
+                    } else {
+                        reject(new Error('Download timeout'));
+                    }
                 });
-            });
+            };
 
-            request.on('error', (err) => {
-                file.close();
-                if (fs.existsSync(destPath)) {
-                    fs.unlinkSync(destPath);
-                }
-                reject(err);
-            });
-
-            request.setTimeout(30000, () => {
-                request.destroy();
-                reject(new Error('Download timeout'));
-            });
+            attemptDownload(retries);
         });
     }
 
@@ -461,33 +497,44 @@ class GameManager {
 
     /**
      * Synchronizuje pliki z serwerem
+     * @returns {object} Wynik synchronizacji z listą pobranych, pominiętych i błędnych plików
      */
     async syncFiles(files, gamePath) {
         const results = {
             downloaded: [],
             skipped: [],
             removed: [],
-            errors: []
+            errors: [],
+            totalBytes: 0,
+            downloadedBytes: 0
         };
 
         const totalFiles = files.length;
         let processed = 0;
+
+        console.log(`Starting sync of ${totalFiles} files to ${gamePath}`);
 
         for (const file of files) {
             processed++;
             // Użyj file.path jeśli dostępny (nowy format), w przeciwnym razie mods/filename (stary format)
             const relativePath = file.path || `mods/${file.filename}`;
             const destPath = path.join(gamePath, relativePath);
+            const fileName = file.filename || path.basename(destPath);
 
             // Upewnij się że folder istnieje
             this.ensureDir(path.dirname(destPath));
 
+            // Aktualizuj status - sprawdzanie
+            this.sendToRenderer('game-status', {
+                status: `Sprawdzanie plików... (${processed}/${totalFiles})`
+            });
             this.sendToRenderer('download-progress', {
                 type: 'file',
-                name: file.filename || path.basename(destPath),
+                name: fileName,
                 current: processed,
                 total: totalFiles,
-                status: 'checking'
+                status: 'checking',
+                percent: Math.round((processed / totalFiles) * 100)
             });
 
             try {
@@ -495,40 +542,80 @@ class GameManager {
 
                 // Sprawdź czy plik istnieje i ma prawidłowy hash
                 if (fs.existsSync(destPath)) {
-                    const hash = await this.calculateFileHash(destPath);
-                    if (hash === file.sha256) {
-                        needsDownload = false;
-                        results.skipped.push(file.filename);
+                    try {
+                        const existingHash = await this.calculateFileHash(destPath);
+                        if (existingHash === file.sha256) {
+                            needsDownload = false;
+                            results.skipped.push(fileName);
+                            console.log(`[SKIP] ${fileName} - hash matches`);
+                        } else {
+                            console.log(`[UPDATE] ${fileName} - hash mismatch, will re-download`);
+                        }
+                    } catch (hashError) {
+                        console.log(`[REDOWNLOAD] ${fileName} - could not verify hash: ${hashError.message}`);
                     }
                 }
 
                 if (needsDownload) {
+                    // Aktualizuj status - pobieranie
+                    this.sendToRenderer('game-status', {
+                        status: `Pobieranie: ${fileName} (${processed}/${totalFiles})`
+                    });
                     this.sendToRenderer('download-progress', {
                         type: 'file',
-                        name: file.filename || path.basename(destPath),
+                        name: fileName,
                         current: processed,
                         total: totalFiles,
-                        status: 'downloading'
+                        status: 'downloading',
+                        percent: Math.round((processed / totalFiles) * 100)
                     });
+
+                    console.log(`[DOWNLOAD] ${fileName} from ${file.url}`);
 
                     await this.downloadFile(file.url, destPath, (downloaded, total) => {
                         this.sendToRenderer('download-progress', {
                             type: 'file',
-                            name: file.filename || path.basename(destPath),
+                            name: fileName,
                             current: processed,
                             total: totalFiles,
                             status: 'downloading',
                             bytes: downloaded,
-                            totalBytes: total
+                            totalBytes: total,
+                            percent: Math.round((processed / totalFiles) * 100)
                         });
                     });
 
-                    results.downloaded.push(file.filename);
+                    // Weryfikuj pobrany plik
+                    if (file.sha256) {
+                        const downloadedHash = await this.calculateFileHash(destPath);
+                        if (downloadedHash !== file.sha256) {
+                            // Hash nie zgadza się - usuń plik i zgłoś błąd
+                            fs.unlinkSync(destPath);
+                            throw new Error(`Hash verification failed for ${fileName}`);
+                        }
+                        console.log(`[VERIFIED] ${fileName} - hash OK`);
+                    }
+
+                    results.downloaded.push(fileName);
+                    results.downloadedBytes += file.size || 0;
                 }
             } catch (error) {
-                results.errors.push({ filename: file.filename, error: error.message });
+                console.error(`[ERROR] ${fileName}: ${error.message}`);
+                results.errors.push({ filename: fileName, error: error.message });
+
+                // Aktualizuj UI o błędzie
+                this.sendToRenderer('download-progress', {
+                    type: 'file',
+                    name: fileName,
+                    current: processed,
+                    total: totalFiles,
+                    status: 'error',
+                    error: error.message
+                });
             }
         }
+
+        console.log(`Sync complete: ${results.downloaded.length} downloaded, ${results.skipped.length} skipped, ${results.errors.length} errors`);
 
         return results;
     }
@@ -593,14 +680,40 @@ class GameManager {
 
             const filesToSync = config.files || config.mods || [];
             if (filesToSync.length > 0) {
-                // Jeśli używamy starego config.mods, musimy zapewnić kompatybilność
-                // syncFiles obsługuje to przez fallback do mods/filename
-                const syncResult = await this.syncFiles(filesToSync, gamePath);
-                console.log('Files sync result:', syncResult);
+                console.log(`Syncing ${filesToSync.length} files...`);
 
+                const syncResult = await this.syncFiles(filesToSync, gamePath);
+                console.log('Files sync result:', {
+                    downloaded: syncResult.downloaded.length,
+                    skipped: syncResult.skipped.length,
+                    errors: syncResult.errors.length
+                });
+
+                // Jeśli są błędy, zatrzymaj uruchamianie
                 if (syncResult.errors.length > 0) {
-                    console.warn('Some files failed to download:', syncResult.errors);
+                    const errorFiles = syncResult.errors.map(e => e.filename).join(', ');
+                    console.error('Failed to download files:', syncResult.errors);
+
+                    // Jeśli więcej niż 10% plików nie powiodło się, zatrzymaj
+                    const errorRate = syncResult.errors.length / filesToSync.length;
+                    if (errorRate > 0.1 || syncResult.errors.length >= 5) {
+                        throw new Error(`Nie udało się pobrać ${syncResult.errors.length} plików: ${errorFiles.substring(0, 100)}...`);
+                    } else {
+                        // Wyświetl ostrzeżenie ale kontynuuj
+                        this.sendToRenderer('game-status', {
+                            status: `Uwaga: ${syncResult.errors.length} plik(ów) nie zostało pobranych`,
+                            warning: true
+                        });
+                        console.warn(`Continuing despite ${syncResult.errors.length} download errors`);
+                    }
                 }
+
+                // Wyświetl podsumowanie
+                this.sendToRenderer('game-status', {
+                    status: `Synchronizacja zakończona: ${syncResult.downloaded.length} pobranych, ${syncResult.skipped.length} z cache`
+                });
+            } else {
+                console.log('No files to sync');
             }
 
             // Przygotuj opcje uruchomienia
