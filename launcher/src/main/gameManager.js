@@ -379,44 +379,59 @@ class GameManager {
     }
 
     /**
-     * Pobiera plik z URL z obsługą retry
+     * Pobiera plik z URL z obsługą retry i exponential backoff
      */
-    downloadFile(url, destPath, onProgress, retries = 3) {
+    downloadFile(url, destPath, onProgress, maxRetries = 5) {
         return new Promise((resolve, reject) => {
             this.ensureDir(path.dirname(destPath));
 
-            // Konwertuj względne URL na pełne
             const fullUrl = this.getFullUrl(url);
             if (!fullUrl) {
                 reject(new Error('Invalid URL'));
                 return;
             }
 
-            const attemptDownload = (attemptsLeft) => {
+            const attemptDownload = (attempt) => {
                 const protocol = fullUrl.startsWith('https') ? https : http;
+
+                // Usuń plik jeśli istnieje (może być częściowo pobrany)
+                if (fs.existsSync(destPath)) {
+                    try { fs.unlinkSync(destPath); } catch (e) {}
+                }
+
                 const file = fs.createWriteStream(destPath);
                 let downloadedBytes = 0;
+                let lastProgressTime = Date.now();
+
+                const cleanup = () => {
+                    try {
+                        file.close();
+                        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                    } catch (e) {}
+                };
+
+                const retryOrFail = (error) => {
+                    cleanup();
+                    if (attempt < maxRetries) {
+                        const delay = Math.min(1000 * Math.pow(2, attempt), 10000); // Exponential backoff, max 10s
+                        console.log(`[RETRY ${attempt + 1}/${maxRetries}] ${path.basename(destPath)} - ${error.message}, waiting ${delay}ms`);
+                        setTimeout(() => attemptDownload(attempt + 1), delay);
+                    } else {
+                        reject(new Error(`Failed after ${maxRetries} attempts: ${error.message}`));
+                    }
+                };
 
                 const request = protocol.get(fullUrl, (response) => {
                     // Obsługa przekierowań
                     if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                        file.close();
-                        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                        return this.downloadFile(response.headers.location, destPath, onProgress, attemptsLeft)
+                        cleanup();
+                        return this.downloadFile(response.headers.location, destPath, onProgress, maxRetries - attempt)
                             .then(resolve)
                             .catch(reject);
                     }
 
                     if (response.statusCode !== 200) {
-                        file.close();
-                        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-
-                        if (attemptsLeft > 1) {
-                            console.log(`HTTP ${response.statusCode}, retrying... (${attemptsLeft - 1} attempts left)`);
-                            setTimeout(() => attemptDownload(attemptsLeft - 1), 1000);
-                        } else {
-                            reject(new Error(`HTTP ${response.statusCode}`));
-                        }
+                        retryOrFail(new Error(`HTTP ${response.statusCode}`));
                         return;
                     }
 
@@ -424,6 +439,7 @@ class GameManager {
 
                     response.on('data', (chunk) => {
                         downloadedBytes += chunk.length;
+                        lastProgressTime = Date.now();
                         if (onProgress && totalSize > 0) {
                             onProgress(downloadedBytes, totalSize);
                         }
@@ -432,52 +448,47 @@ class GameManager {
                     response.pipe(file);
 
                     file.on('finish', () => {
-                        file.close();
-                        resolve(destPath);
+                        file.close(() => {
+                            // Sprawdź czy plik ma sensowny rozmiar
+                            try {
+                                const stat = fs.statSync(destPath);
+                                if (totalSize > 0 && stat.size < totalSize * 0.99) {
+                                    retryOrFail(new Error(`Incomplete download: ${stat.size}/${totalSize} bytes`));
+                                } else {
+                                    resolve(destPath);
+                                }
+                            } catch (e) {
+                                resolve(destPath);
+                            }
+                        });
                     });
 
-                    file.on('error', (err) => {
-                        file.close();
-                        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-
-                        if (attemptsLeft > 1) {
-                            console.log(`File write error, retrying... (${attemptsLeft - 1} attempts left)`);
-                            setTimeout(() => attemptDownload(attemptsLeft - 1), 1000);
-                        } else {
-                            reject(err);
-                        }
-                    });
+                    file.on('error', (err) => retryOrFail(err));
+                    response.on('error', (err) => retryOrFail(err));
                 });
 
-                request.on('error', (err) => {
-                    file.close();
-                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                request.on('error', (err) => retryOrFail(err));
 
-                    if (attemptsLeft > 1) {
-                        console.log(`Download error: ${err.message}, retrying... (${attemptsLeft - 1} attempts left)`);
-                        setTimeout(() => attemptDownload(attemptsLeft - 1), 2000);
-                    } else {
-                        reject(err);
-                    }
-                });
-
-                // Timeout zależny od rozmiaru - minimum 60 sekund, więcej dla dużych plików
-                const timeout = Math.max(60000, 120000); // 60-120 sekund
+                // Timeout - 2 minuty dla całego pobierania
+                const timeout = 120000;
                 request.setTimeout(timeout, () => {
                     request.destroy();
-                    file.close();
-                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-
-                    if (attemptsLeft > 1) {
-                        console.log(`Download timeout, retrying... (${attemptsLeft - 1} attempts left)`);
-                        setTimeout(() => attemptDownload(attemptsLeft - 1), 2000);
-                    } else {
-                        reject(new Error('Download timeout'));
-                    }
+                    retryOrFail(new Error('Download timeout'));
                 });
+
+                // Sprawdź czy pobieranie się nie zawiesiło (brak danych przez 30s)
+                const stallCheck = setInterval(() => {
+                    if (Date.now() - lastProgressTime > 30000 && downloadedBytes > 0) {
+                        clearInterval(stallCheck);
+                        request.destroy();
+                        retryOrFail(new Error('Download stalled'));
+                    }
+                }, 5000);
+
+                request.on('close', () => clearInterval(stallCheck));
             };
 
-            attemptDownload(retries);
+            attemptDownload(0);
         });
     }
 
@@ -496,126 +507,205 @@ class GameManager {
     }
 
     /**
-     * Synchronizuje pliki z serwerem
-     * @returns {object} Wynik synchronizacji z listą pobranych, pominiętych i błędnych plików
+     * Sprawdza czy plik wymaga pobrania (nie istnieje lub zły hash)
+     */
+    async checkFileNeedsDownload(file, destPath) {
+        if (!fs.existsSync(destPath)) {
+            return { needsDownload: true, reason: 'missing' };
+        }
+
+        try {
+            const existingHash = await this.calculateFileHash(destPath);
+            if (existingHash === file.sha256) {
+                return { needsDownload: false, reason: 'cached' };
+            }
+            return { needsDownload: true, reason: 'hash_mismatch' };
+        } catch (error) {
+            return { needsDownload: true, reason: 'hash_error' };
+        }
+    }
+
+    /**
+     * Pobiera pojedynczy plik z weryfikacją
+     */
+    async downloadAndVerifyFile(file, destPath, onProgress) {
+        await this.downloadFile(file.url, destPath, onProgress);
+
+        // Weryfikuj hash po pobraniu
+        if (file.sha256) {
+            const downloadedHash = await this.calculateFileHash(destPath);
+            if (downloadedHash !== file.sha256) {
+                fs.unlinkSync(destPath);
+                throw new Error('Hash verification failed');
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Synchronizuje pliki z serwerem - RÓWNOLEGŁE POBIERANIE
      */
     async syncFiles(files, gamePath) {
+        const CONCURRENT_DOWNLOADS = 5; // Liczba równoległych pobrań
+        const MAX_RETRIES_PER_FILE = 3;
+
         const results = {
             downloaded: [],
             skipped: [],
-            removed: [],
             errors: [],
-            totalBytes: 0,
-            downloadedBytes: 0
+            totalFiles: files.length
         };
 
-        const totalFiles = files.length;
-        let processed = 0;
+        console.log(`\n========================================`);
+        console.log(`Starting sync of ${files.length} files`);
+        console.log(`Concurrent downloads: ${CONCURRENT_DOWNLOADS}`);
+        console.log(`========================================\n`);
 
-        console.log(`Starting sync of ${totalFiles} files to ${gamePath}`);
+        // FAZA 1: Sprawdź które pliki wymagają pobrania
+        this.sendToRenderer('game-status', { status: 'Sprawdzanie plików...' });
+
+        const filesToDownload = [];
+        let checkedCount = 0;
 
         for (const file of files) {
-            processed++;
-            // Użyj file.path jeśli dostępny (nowy format), w przeciwnym razie mods/filename (stary format)
+            checkedCount++;
             const relativePath = file.path || `mods/${file.filename}`;
             const destPath = path.join(gamePath, relativePath);
             const fileName = file.filename || path.basename(destPath);
 
-            // Upewnij się że folder istnieje
             this.ensureDir(path.dirname(destPath));
 
-            // Aktualizuj status - sprawdzanie
-            this.sendToRenderer('game-status', {
-                status: `Sprawdzanie plików... (${processed}/${totalFiles})`
-            });
-            this.sendToRenderer('download-progress', {
-                type: 'file',
-                name: fileName,
-                current: processed,
-                total: totalFiles,
-                status: 'checking',
-                percent: Math.round((processed / totalFiles) * 100)
-            });
+            const check = await this.checkFileNeedsDownload(file, destPath);
 
-            try {
-                let needsDownload = true;
+            if (check.needsDownload) {
+                filesToDownload.push({
+                    ...file,
+                    destPath,
+                    fileName,
+                    relativePath
+                });
+            } else {
+                results.skipped.push(fileName);
+            }
 
-                // Sprawdź czy plik istnieje i ma prawidłowy hash
-                if (fs.existsSync(destPath)) {
-                    try {
-                        const existingHash = await this.calculateFileHash(destPath);
-                        if (existingHash === file.sha256) {
-                            needsDownload = false;
-                            results.skipped.push(fileName);
-                            console.log(`[SKIP] ${fileName} - hash matches`);
-                        } else {
-                            console.log(`[UPDATE] ${fileName} - hash mismatch, will re-download`);
-                        }
-                    } catch (hashError) {
-                        console.log(`[REDOWNLOAD] ${fileName} - could not verify hash: ${hashError.message}`);
-                    }
-                }
-
-                if (needsDownload) {
-                    // Aktualizuj status - pobieranie
-                    this.sendToRenderer('game-status', {
-                        status: `Pobieranie: ${fileName} (${processed}/${totalFiles})`
-                    });
-                    this.sendToRenderer('download-progress', {
-                        type: 'file',
-                        name: fileName,
-                        current: processed,
-                        total: totalFiles,
-                        status: 'downloading',
-                        percent: Math.round((processed / totalFiles) * 100)
-                    });
-
-                    console.log(`[DOWNLOAD] ${fileName} from ${file.url}`);
-
-                    await this.downloadFile(file.url, destPath, (downloaded, total) => {
-                        this.sendToRenderer('download-progress', {
-                            type: 'file',
-                            name: fileName,
-                            current: processed,
-                            total: totalFiles,
-                            status: 'downloading',
-                            bytes: downloaded,
-                            totalBytes: total,
-                            percent: Math.round((processed / totalFiles) * 100)
-                        });
-                    });
-
-                    // Weryfikuj pobrany plik
-                    if (file.sha256) {
-                        const downloadedHash = await this.calculateFileHash(destPath);
-                        if (downloadedHash !== file.sha256) {
-                            // Hash nie zgadza się - usuń plik i zgłoś błąd
-                            fs.unlinkSync(destPath);
-                            throw new Error(`Hash verification failed for ${fileName}`);
-                        }
-                        console.log(`[VERIFIED] ${fileName} - hash OK`);
-                    }
-
-                    results.downloaded.push(fileName);
-                    results.downloadedBytes += file.size || 0;
-                }
-            } catch (error) {
-                console.error(`[ERROR] ${fileName}: ${error.message}`);
-                results.errors.push({ filename: fileName, error: error.message });
-
-                // Aktualizuj UI o błędzie
-                this.sendToRenderer('download-progress', {
-                    type: 'file',
-                    name: fileName,
-                    current: processed,
-                    total: totalFiles,
-                    status: 'error',
-                    error: error.message
+            // Aktualizuj postęp sprawdzania
+            if (checkedCount % 50 === 0 || checkedCount === files.length) {
+                this.sendToRenderer('game-status', {
+                    status: `Sprawdzanie plików... (${checkedCount}/${files.length})`
                 });
             }
         }
 
-        console.log(`Sync complete: ${results.downloaded.length} downloaded, ${results.skipped.length} skipped, ${results.errors.length} errors`);
+        console.log(`\nFiles to download: ${filesToDownload.length}`);
+        console.log(`Files already cached: ${results.skipped.length}\n`);
+
+        if (filesToDownload.length === 0) {
+            this.sendToRenderer('game-status', {
+                status: `Wszystkie pliki są aktualne (${results.skipped.length} z cache)`
+            });
+            return results;
+        }
+
+        // FAZA 2: Pobierz pliki równolegle
+        this.sendToRenderer('game-status', {
+            status: `Pobieranie ${filesToDownload.length} plików...`
+        });
+
+        let downloadedCount = 0;
+        let activeDownloads = 0;
+        let currentIndex = 0;
+        const failedFiles = [];
+
+        const downloadNext = async () => {
+            while (currentIndex < filesToDownload.length && activeDownloads < CONCURRENT_DOWNLOADS) {
+                const fileIndex = currentIndex++;
+                const file = filesToDownload[fileIndex];
+                activeDownloads++;
+
+                (async () => {
+                    let success = false;
+                    let lastError = null;
+
+                    for (let retry = 0; retry < MAX_RETRIES_PER_FILE && !success; retry++) {
+                        try {
+                            this.sendToRenderer('download-progress', {
+                                type: 'file',
+                                name: file.fileName,
+                                current: downloadedCount + 1,
+                                total: filesToDownload.length,
+                                status: 'downloading',
+                                retry: retry > 0 ? retry : undefined
+                            });
+
+                            await this.downloadAndVerifyFile(file, file.destPath, (bytes, total) => {
+                                this.sendToRenderer('download-progress', {
+                                    type: 'file',
+                                    name: file.fileName,
+                                    current: downloadedCount + 1,
+                                    total: filesToDownload.length,
+                                    status: 'downloading',
+                                    bytes,
+                                    totalBytes: total,
+                                    percent: Math.round(((downloadedCount + (bytes / total)) / filesToDownload.length) * 100)
+                                });
+                            });
+
+                            success = true;
+                            downloadedCount++;
+                            results.downloaded.push(file.fileName);
+                            console.log(`[OK] ${file.fileName} (${downloadedCount}/${filesToDownload.length})`);
+
+                        } catch (error) {
+                            lastError = error;
+                            console.log(`[FAIL] ${file.fileName} attempt ${retry + 1}: ${error.message}`);
+
+                            if (retry < MAX_RETRIES_PER_FILE - 1) {
+                                await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
+                            }
+                        }
+                    }
+
+                    if (!success) {
+                        results.errors.push({ filename: file.fileName, error: lastError?.message || 'Unknown error' });
+                        failedFiles.push(file);
+                        console.error(`[FAILED] ${file.fileName} after ${MAX_RETRIES_PER_FILE} attempts`);
+                    }
+
+                    activeDownloads--;
+
+                    // Aktualizuj status
+                    const totalProgress = downloadedCount + results.errors.length;
+                    this.sendToRenderer('game-status', {
+                        status: `Pobieranie... (${totalProgress}/${filesToDownload.length})${results.errors.length > 0 ? ` - ${results.errors.length} błędów` : ''}`
+                    });
+
+                    // Kontynuuj pobieranie następnych
+                    downloadNext();
+                })();
+            }
+        };
+
+        // Rozpocznij pobieranie
+        await new Promise((resolve) => {
+            const checkComplete = setInterval(() => {
+                const totalProcessed = downloadedCount + results.errors.length;
+                if (totalProcessed >= filesToDownload.length && activeDownloads === 0) {
+                    clearInterval(checkComplete);
+                    resolve();
+                }
+            }, 100);
+
+            downloadNext();
+        });
+
+        // FAZA 3: Podsumowanie
+        console.log(`\n========================================`);
+        console.log(`Sync complete:`);
+        console.log(`  Downloaded: ${results.downloaded.length}`);
+        console.log(`  Cached: ${results.skipped.length}`);
+        console.log(`  Errors: ${results.errors.length}`);
+        console.log(`========================================\n`);
 
         return results;
     }
