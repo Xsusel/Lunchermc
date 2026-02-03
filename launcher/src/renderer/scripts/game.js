@@ -179,6 +179,8 @@ class GameLauncher {
 
             const gameConfig = launcherConfig.data.config;
             const mods = launcherConfig.data.mods || [];
+            // Użyj zunifikowanej listy plików (mody + configs + datapacks itd.)
+            const files = launcherConfig.data.files || [];
 
             // Sprawdz tryb konserwacji
             if (gameConfig.maintenanceMode) {
@@ -186,6 +188,7 @@ class GameLauncher {
             }
 
             // 3. Przygotuj konfiguracje uruchomienia
+            // Użyj files jeśli dostępne (nowy format), fallback do mods (stary format)
             const launchConfig = {
                 username: userConfig.username,
                 gameVersion: gameConfig.gameVersion,
@@ -194,7 +197,9 @@ class GameLauncher {
                 fabricVersion: gameConfig.fabricVersion,
                 serverIp: gameConfig.serverIp,
                 serverPort: gameConfig.serverPort || 25565,
-                mods: mods.filter(m => m.is_enabled)
+                // Przekaż pełną listę plików do synchronizacji
+                files: files.length > 0 ? files : mods,
+                mods: mods // zachowaj dla kompatybilności
             };
 
             // 4. Uruchom gre przez main process
