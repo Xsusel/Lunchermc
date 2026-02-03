@@ -422,8 +422,12 @@ async function loadServerConfig() {
             }
             elements.gameVersion.textContent = versionText;
 
-            // Liczba modów
-            const modsCount = response.data.mods?.filter(m => m.is_enabled).length || 0;
+            // Liczba modów - API zwraca tylko włączone mody, więc liczymy wszystkie
+            // Plus pliki typu 'mod' z listy files
+            const modsFromMods = response.data.mods?.length || 0;
+            const modsFromFiles = response.data.files?.filter(f => f.type === 'mod').length || 0;
+            // Użyj większej wartości (files zawiera mody, więc nie sumujemy)
+            const modsCount = Math.max(modsFromMods, modsFromFiles);
             if (elements.modsCount) {
                 elements.modsCount.textContent = modsCount;
             }

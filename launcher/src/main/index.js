@@ -41,6 +41,9 @@ const store = new Store({
         // Ścieżka do gry
         gamePath: '',
 
+        // URL API serwera
+        apiUrl: 'https://mc.xsus.pl',
+
         // Ustawienia launchera
         launcherVersion: '1.0.0',
         autoUpdate: true,
