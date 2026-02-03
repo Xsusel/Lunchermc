@@ -48,8 +48,28 @@ class GameConfig {
 
         for (const [key, value] of Object.entries(data)) {
             if (allowedFields.includes(key)) {
+                // Sanityzacja wartości - SQLite akceptuje tylko: number, string, bigint, buffer, null
+                let sanitizedValue = value;
+
+                // Konwertuj undefined na null
+                if (sanitizedValue === undefined) {
+                    sanitizedValue = null;
+                }
+                // Konwertuj obiekty na null (nie powinny być wysyłane)
+                else if (typeof sanitizedValue === 'object' && sanitizedValue !== null && !Buffer.isBuffer(sanitizedValue)) {
+                    sanitizedValue = null;
+                }
+                // Konwertuj boolean na number dla SQLite
+                else if (typeof sanitizedValue === 'boolean') {
+                    sanitizedValue = sanitizedValue ? 1 : 0;
+                }
+                // Upewnij się że server_port jest liczbą
+                else if (key === 'server_port' && typeof sanitizedValue === 'string') {
+                    sanitizedValue = parseInt(sanitizedValue, 10) || 25565;
+                }
+
                 updates.push(`${key} = ?`);
-                values.push(value);
+                values.push(sanitizedValue);
             }
         }
 
