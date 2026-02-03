@@ -278,9 +278,10 @@ class GameManager {
     // ============================================
 
     /**
-     * Pobiera URL instalatora Forge
+     * Pobiera URL instalatora Forge z oficjalnego API
      */
     getForgeInstallerUrl(mcVersion, forgeVersion) {
+        // Format URL: https://maven.minecraftforge.net/net/minecraftforge/forge/{mcVersion}-{forgeVersion}/forge-{mcVersion}-{forgeVersion}-installer.jar
         return `https://maven.minecraftforge.net/net/minecraftforge/forge/${mcVersion}-${forgeVersion}/forge-${mcVersion}-${forgeVersion}-installer.jar`;
     }
 
@@ -288,24 +289,37 @@ class GameManager {
      * Sprawdza czy Forge jest zainstalowany
      */
     isForgeInstalled(gamePath, mcVersion, forgeVersion) {
-        // Sprawdź czy istnieje folder wersji Forge
-        const forgeVersionId = `${mcVersion}-forge-${forgeVersion}`;
-        const versionJsonPath = path.join(gamePath, 'versions', forgeVersionId, `${forgeVersionId}.json`);
-        return fs.existsSync(versionJsonPath);
+        // Sprawdź różne możliwe formaty nazwy wersji Forge
+        const possibleVersionIds = [
+            `${mcVersion}-forge-${forgeVersion}`,
+            `${mcVersion}-forge-${mcVersion}-${forgeVersion}`,
+            `forge-${mcVersion}-${forgeVersion}`,
+            `${mcVersion}-Forge_${forgeVersion}`
+        ];
+
+        for (const versionId of possibleVersionIds) {
+            const versionJsonPath = path.join(gamePath, 'versions', versionId, `${versionId}.json`);
+            if (fs.existsSync(versionJsonPath)) {
+                console.log(`Forge found at: ${versionJsonPath}`);
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
-     * Pobiera i instaluje Forge
+     * Pobiera installer Forge (nie uruchamia go - minecraft-launcher-core to zrobi)
      */
-    async installForge(gamePath, mcVersion, forgeVersion, javaPath) {
+    async downloadForgeInstaller(gamePath, mcVersion, forgeVersion) {
         const forgeDir = path.join(gamePath, 'forge');
         this.ensureDir(forgeDir);
 
         const installerPath = path.join(forgeDir, `forge-${mcVersion}-${forgeVersion}-installer.jar`);
-        const installerUrl = this.getForgeInstallerUrl(mcVersion, forgeVersion);
 
         // Pobierz installer jeśli nie istnieje
         if (!fs.existsSync(installerPath)) {
+            const installerUrl = this.getForgeInstallerUrl(mcVersion, forgeVersion);
+
             this.sendToRenderer('game-status', { status: `Pobieranie Forge ${forgeVersion}...` });
             this.sendToRenderer('download-progress', {
                 type: 'forge-installer',
@@ -315,8 +329,11 @@ class GameManager {
                 status: 'downloading'
             });
 
+            console.log(`Downloading Forge installer from: ${installerUrl}`);
+
             try {
                 await this.downloadFile(installerUrl, installerPath, (downloaded, total) => {
+                    const percent = total > 0 ? Math.round((downloaded / total) * 100) : 0;
                     this.sendToRenderer('download-progress', {
                         type: 'forge-installer',
                         name: `forge-${mcVersion}-${forgeVersion}-installer.jar`,
@@ -324,74 +341,24 @@ class GameManager {
                         total: 1,
                         status: 'downloading',
                         bytes: downloaded,
-                        totalBytes: total
+                        totalBytes: total,
+                        percent
                     });
                 });
+                console.log(`Forge installer downloaded to: ${installerPath}`);
             } catch (error) {
                 console.error('Failed to download Forge installer:', error);
+                // Usuń uszkodzony plik jeśli istnieje
+                if (fs.existsSync(installerPath)) {
+                    fs.unlinkSync(installerPath);
+                }
                 throw new Error(`Nie udało się pobrać Forge: ${error.message}`);
             }
+        } else {
+            console.log(`Forge installer already exists at: ${installerPath}`);
         }
 
-        // Uruchom installer
-        this.sendToRenderer('game-status', { status: 'Instalowanie Forge...' });
-
-        return new Promise((resolve, reject) => {
-            // Uruchom Forge installer w trybie instalacji klienta
-            const args = [
-                '-jar',
-                installerPath,
-                '--installClient',
-                gamePath
-            ];
-
-            console.log('Running Forge installer:', javaPath, args.join(' '));
-
-            const installer = spawn(javaPath.replace('javaw', 'java'), args, {
-                cwd: gamePath,
-                stdio: ['ignore', 'pipe', 'pipe']
-            });
-
-            let output = '';
-            let errorOutput = '';
-
-            installer.stdout.on('data', (data) => {
-                output += data.toString();
-                console.log('[Forge Installer]', data.toString());
-            });
-
-            installer.stderr.on('data', (data) => {
-                errorOutput += data.toString();
-                console.log('[Forge Installer Error]', data.toString());
-            });
-
-            installer.on('close', (code) => {
-                if (code === 0) {
-                    console.log('Forge installed successfully');
-                    resolve(true);
-                } else {
-                    // Forge installer może zwrócić kod 1 nawet przy sukcesie
-                    // Sprawdź czy pliki zostały utworzone
-                    if (this.isForgeInstalled(gamePath, mcVersion, forgeVersion)) {
-                        console.log('Forge installed successfully (exit code non-zero but files exist)');
-                        resolve(true);
-                    } else {
-                        console.error('Forge installation failed:', errorOutput || output);
-                        reject(new Error(`Instalacja Forge nie powiodła się (kod: ${code})`));
-                    }
-                }
-            });
-
-            installer.on('error', (err) => {
-                reject(new Error(`Nie można uruchomić instalatora Forge: ${err.message}`));
-            });
-
-            // Timeout po 5 minutach
-            setTimeout(() => {
-                installer.kill();
-                reject(new Error('Instalacja Forge trwała za długo'));
-            }, 5 * 60 * 1000);
-        });
+        return installerPath;
     }
 
     // ============================================
@@ -602,24 +569,23 @@ class GameManager {
                 throw new Error(`Nie znaleziono Java w: ${javaPath}`);
             }
 
-            // Instalacja Forge jeśli potrzebna
+            // Przygotowanie Forge jeśli potrzebne
             let forgeInstallerPath = null;
             if (config.loaderType === 'forge' && config.forgeVersion) {
-                const isInstalled = this.isForgeInstalled(gamePath, config.gameVersion, config.forgeVersion);
-                console.log(`Forge ${config.forgeVersion} installed: ${isInstalled}`);
+                this.sendToRenderer('game-status', { status: 'Przygotowanie Forge...' });
 
-                if (!isInstalled) {
-                    this.sendToRenderer('game-status', { status: 'Przygotowanie Forge...' });
-                    try {
-                        await this.installForge(gamePath, config.gameVersion, config.forgeVersion, javaPath);
-                    } catch (error) {
-                        console.error('Forge installation failed:', error);
-                        throw new Error(`Nie udało się zainstalować Forge: ${error.message}`);
-                    }
+                try {
+                    // Pobierz installer Forge (minecraft-launcher-core go zainstaluje)
+                    forgeInstallerPath = await this.downloadForgeInstaller(
+                        gamePath,
+                        config.gameVersion,
+                        config.forgeVersion
+                    );
+                    console.log(`Forge installer ready at: ${forgeInstallerPath}`);
+                } catch (error) {
+                    console.error('Forge preparation failed:', error);
+                    throw new Error(`Nie udało się przygotować Forge: ${error.message}`);
                 }
-
-                // Ustaw ścieżkę do instalatora (minecraft-launcher-core może jej potrzebować)
-                forgeInstallerPath = path.join(gamePath, 'forge', `forge-${config.gameVersion}-${config.forgeVersion}-installer.jar`);
             }
 
             // Synchronizuj pliki (preferuj config.files, fallback do config.mods)
@@ -648,28 +614,15 @@ class GameManager {
             if (Client) {
                 const launcher = new Client();
 
-                // Ustal ID wersji
-                let versionNumber = config.gameVersion;
-                let versionType = 'release';
-
-                if (config.loaderType === 'forge' && config.forgeVersion) {
-                    // Dla Forge używamy ID wersji Forge
-                    versionNumber = `${config.gameVersion}-forge-${config.forgeVersion}`;
-                    versionType = 'release';
-                } else if (config.loaderType === 'fabric' && config.fabricVersion) {
-                    versionNumber = `fabric-loader-${config.fabricVersion}-${config.gameVersion}`;
-                    versionType = 'release';
-                }
-
+                // Przygotuj opcje uruchomienia
                 const launchOpts = {
                     // Ścieżka gry
                     root: gamePath,
 
-                    // Wersja
+                    // Wersja - dla Forge minecraft-launcher-core potrzebuje bazowej wersji MC
                     version: {
-                        number: versionNumber,
-                        type: versionType,
-                        custom: config.loaderType !== 'vanilla' ? versionNumber : undefined
+                        number: config.gameVersion,
+                        type: 'release'
                     },
 
                     // Pamięć
@@ -697,18 +650,29 @@ class GameManager {
                         fullscreen: resolution.fullscreen
                     },
 
-                    // Automatyczne połączenie z serwerem
+                    // Automatyczne połączenie z serwerem (dla MC 1.20+)
                     quickPlay: config.serverIp ? {
                         type: 'multiplayer',
                         identifier: `${config.serverIp}:${config.serverPort || 25565}`
                     } : undefined,
 
                     // Dodatkowe argumenty
-                    customArgs: customJavaArgs ? customJavaArgs.split(' ') : [],
+                    customArgs: customJavaArgs ? customJavaArgs.split(' ').filter(a => a) : [],
 
-                    // Forge - przekaż ścieżkę do instalatora
-                    forge: forgeInstallerPath && fs.existsSync(forgeInstallerPath) ? forgeInstallerPath : undefined
+                    // Forge - przekaż ścieżkę do instalatora JAR
+                    // minecraft-launcher-core automatycznie pobierze MC i zainstaluje Forge
+                    forge: forgeInstallerPath || undefined,
+
+                    // Overrides dla modów - wskaż folder mods
+                    overrides: {
+                        gameDirectory: gamePath
+                    }
                 };
+
+                // Dla Fabric
+                if (config.loaderType === 'fabric' && config.fabricVersion) {
+                    launchOpts.version.custom = `fabric-loader-${config.fabricVersion}-${config.gameVersion}`;
+                }
 
                 console.log('Launch options:', JSON.stringify({
                     ...launchOpts,
@@ -716,17 +680,49 @@ class GameManager {
                 }, null, 2));
 
                 // Listener dla postępu
-                launcher.on('debug', (e) => console.log('[MC Debug]', e));
+                launcher.on('debug', (e) => {
+                    console.log('[MC Debug]', e);
+                });
+
                 launcher.on('data', (e) => {
+                    console.log('[MC Data]', e);
                     this.sendToRenderer('game-output', e);
                 });
+
                 launcher.on('progress', (e) => {
+                    console.log('[MC Progress]', e.type, e.task, `${e.current}/${e.total}`);
+
+                    // Mapuj typy postępu na komunikaty
+                    let statusMessage = 'Pobieranie...';
+                    if (e.type === 'assets') {
+                        statusMessage = `Pobieranie zasobów... (${e.current}/${e.total})`;
+                    } else if (e.type === 'natives') {
+                        statusMessage = `Pobieranie bibliotek natywnych... (${e.current}/${e.total})`;
+                    } else if (e.type === 'classes') {
+                        statusMessage = `Pobieranie klas Minecraft... (${e.current}/${e.total})`;
+                    } else if (e.type === 'forge') {
+                        statusMessage = `Instalowanie Forge... (${e.current}/${e.total})`;
+                    }
+
+                    this.sendToRenderer('game-status', { status: statusMessage });
                     this.sendToRenderer('download-progress', {
                         type: e.type,
                         task: e.task,
                         current: e.current,
-                        total: e.total
+                        total: e.total,
+                        percent: e.total > 0 ? Math.round((e.current / e.total) * 100) : 0
                     });
+                });
+
+                launcher.on('download', (e) => {
+                    console.log('[MC Download]', e);
+                });
+
+                launcher.on('download-status', (e) => {
+                    console.log('[MC Download Status]', e);
+                    if (e.name) {
+                        this.sendToRenderer('game-status', { status: `Pobieranie: ${e.name}` });
+                    }
                 });
 
                 // Uruchom
