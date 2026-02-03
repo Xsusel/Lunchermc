@@ -62,7 +62,7 @@ export default function FileManager({ type, title }) {
 
     const handleToggle = async (file) => {
         try {
-            await filesApi.toggle(file.id);
+            await filesApi.toggle(file.id, type);
             toast.success(file.is_enabled ? 'Plik wyłączony' : 'Plik włączony');
             loadFiles();
         } catch (error) {
@@ -74,7 +74,7 @@ export default function FileManager({ type, title }) {
         if (!confirm(`Czy na pewno chcesz usunąć "${file.name}"?`)) return;
 
         try {
-            await filesApi.delete(file.id);
+            await filesApi.delete(file.id, type);
             toast.success('Plik został usunięty');
             loadFiles();
         } catch (error) {

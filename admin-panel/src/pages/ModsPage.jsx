@@ -3,7 +3,7 @@
  */
 import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { modsApi } from '../api/client';
+import { modsApi, filesApi } from '../api/client';
 import FileManager from '../components/FileManager';
 import {
     Package, Plus, Upload, Link as LinkIcon, Trash2,
@@ -19,6 +19,7 @@ function ModsPage() {
     const [urlModal, setUrlModal] = useState(false);
     const [editModal, setEditModal] = useState({ open: false, mod: null });
     const [actionLoading, setActionLoading] = useState(false);
+    const [refreshKey, setRefreshKey] = useState(0);
 
     const fileInputRef = useRef(null);
 
@@ -66,10 +67,18 @@ function ModsPage() {
     const handleSync = async () => {
         setActionLoading(true);
         try {
-            await modsApi.sync();
+            await Promise.all([
+                modsApi.sync(),
+                filesApi.sync()
+            ]);
             toast.success('Synchronizacja zakończona');
-            loadMods();
+            if (activeTab === 'mods') {
+                loadMods();
+            } else {
+                setRefreshKey(prev => prev + 1);
+            }
         } catch (error) {
+            console.error(error);
             toast.error('Błąd synchronizacji');
         } finally {
             setActionLoading(false);
@@ -191,6 +200,17 @@ function ModsPage() {
         totalSize: mods.reduce((acc, m) => acc + (m.file_size || 0), 0)
     };
 
+    const getTabTitle = (tab) => {
+        switch(tab) {
+            case 'resourcepacks': return 'Resource Packs';
+            case 'shaderpacks': return 'Shader Packs';
+            case 'configs': return 'Configs';
+            case 'datapacks': return 'Data Packs';
+            case 'defaultconfigs': return 'Default Configs';
+            default: return 'Pliki';
+        }
+    };
+
     return (
         <div className="space-y-6 animate-fadeIn">
             {/* Nagłówek */}
@@ -204,16 +224,16 @@ function ModsPage() {
                 </div>
 
                 <div className="flex gap-2">
+                    <button
+                        onClick={handleSync}
+                        className="btn btn-secondary"
+                        disabled={actionLoading}
+                    >
+                        <RefreshCw className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
+                        Sync
+                    </button>
                     {activeTab === 'mods' && (
                         <>
-                            <button
-                                onClick={handleSync}
-                                className="btn btn-secondary"
-                                disabled={actionLoading}
-                            >
-                                <RefreshCw className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
-                                Sync
-                            </button>
                             <button
                                 onClick={() => setUrlModal(true)}
                                 className="btn btn-secondary"
@@ -237,19 +257,37 @@ function ModsPage() {
             <div className="flex gap-4 border-b border-mc-gray overflow-x-auto">
                 <button
                     onClick={() => setActiveTab('mods')}
-                    className={`pb-2 px-1 ${activeTab === 'mods' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'mods' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
                 >
                     Mody
                 </button>
                 <button
+                    onClick={() => setActiveTab('resourcepacks')}
+                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'resourcepacks' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                >
+                    Resource Packs
+                </button>
+                <button
+                    onClick={() => setActiveTab('shaderpacks')}
+                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'shaderpacks' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                >
+                    Shader Packs
+                </button>
+                <button
+                    onClick={() => setActiveTab('configs')}
+                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'configs' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                >
+                    Configs
+                </button>
+                <button
                     onClick={() => setActiveTab('datapacks')}
-                    className={`pb-2 px-1 ${activeTab === 'datapacks' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'datapacks' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
                 >
                     Data Packs
                 </button>
                 <button
                     onClick={() => setActiveTab('defaultconfigs')}
-                    className={`pb-2 px-1 ${activeTab === 'defaultconfigs' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'defaultconfigs' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
                 >
                     Default Configs
                 </button>
@@ -385,10 +423,12 @@ function ModsPage() {
                         )}
                     </div>
                 </>
-            ) : activeTab === 'datapacks' ? (
-                <FileManager type="datapacks" title="Data Packs" />
             ) : (
-                <FileManager type="defaultconfigs" title="Default Configs" />
+                <FileManager
+                    key={`${activeTab}-${refreshKey}`}
+                    type={activeTab}
+                    title={getTabTitle(activeTab)}
+                />
             )}
 
             {/* Modal uploadu */}
