@@ -4,13 +4,15 @@
 import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { modsApi } from '../api/client';
+import FileManager from '../components/FileManager';
 import {
     Package, Plus, Upload, Link as LinkIcon, Trash2,
     ToggleLeft, ToggleRight, Edit2, X, Loader2,
-    FileCode, Download, ExternalLink
+    FileCode, Download, ExternalLink, RefreshCw
 } from 'lucide-react';
 
 function ModsPage() {
+    const [activeTab, setActiveTab] = useState('mods');
     const [mods, setMods] = useState([]);
     const [loading, setLoading] = useState(true);
     const [uploadModal, setUploadModal] = useState(false);
@@ -42,8 +44,10 @@ function ModsPage() {
     });
 
     useEffect(() => {
-        loadMods();
-    }, []);
+        if (activeTab === 'mods') {
+            loadMods();
+        }
+    }, [activeTab]);
 
     const loadMods = async () => {
         try {
@@ -56,6 +60,19 @@ function ModsPage() {
             toast.error('Błąd ładowania modów');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleSync = async () => {
+        setActionLoading(true);
+        try {
+            await modsApi.sync();
+            toast.success('Synchronizacja zakończona');
+            loadMods();
+        } catch (error) {
+            toast.error('Błąd synchronizacji');
+        } finally {
+            setActionLoading(false);
         }
     };
 
@@ -181,156 +198,198 @@ function ModsPage() {
                 <div>
                     <h1 className="text-2xl font-bold text-white flex items-center gap-2">
                         <Package className="w-7 h-7 text-mc-green" />
-                        Menadżer Modów
+                        Menadżer Treści
                     </h1>
-                    <p className="text-gray-400">Zarządzaj modami dla graczy</p>
+                    <p className="text-gray-400">Zarządzaj modami i plikami gry</p>
                 </div>
 
                 <div className="flex gap-2">
-                    <button
-                        onClick={() => setUrlModal(true)}
-                        className="btn btn-secondary"
-                    >
-                        <LinkIcon className="w-4 h-4" />
-                        Dodaj przez URL
-                    </button>
-                    <button
-                        onClick={() => setUploadModal(true)}
-                        className="btn btn-primary"
-                    >
-                        <Upload className="w-4 h-4" />
-                        Prześlij plik
-                    </button>
+                    {activeTab === 'mods' && (
+                        <>
+                            <button
+                                onClick={handleSync}
+                                className="btn btn-secondary"
+                                disabled={actionLoading}
+                            >
+                                <RefreshCw className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
+                                Sync
+                            </button>
+                            <button
+                                onClick={() => setUrlModal(true)}
+                                className="btn btn-secondary"
+                            >
+                                <LinkIcon className="w-4 h-4" />
+                                Dodaj przez URL
+                            </button>
+                            <button
+                                onClick={() => setUploadModal(true)}
+                                className="btn btn-primary"
+                            >
+                                <Upload className="w-4 h-4" />
+                                Prześlij plik
+                            </button>
+                        </>
+                    )}
                 </div>
             </div>
 
-            {/* Statystyki */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="card py-4 text-center">
-                    <p className="text-2xl font-bold text-white">{stats.total}</p>
-                    <p className="text-sm text-gray-500">Wszystkich modów</p>
-                </div>
-                <div className="card py-4 text-center">
-                    <p className="text-2xl font-bold text-green-400">{stats.enabled}</p>
-                    <p className="text-sm text-gray-500">Włączonych</p>
-                </div>
-                <div className="card py-4 text-center">
-                    <p className="text-2xl font-bold text-yellow-400">{stats.required}</p>
-                    <p className="text-sm text-gray-500">Wymaganych</p>
-                </div>
-                <div className="card py-4 text-center">
-                    <p className="text-2xl font-bold text-blue-400">{formatBytes(stats.totalSize)}</p>
-                    <p className="text-sm text-gray-500">Łączny rozmiar</p>
-                </div>
+            {/* Zakładki */}
+            <div className="flex gap-4 border-b border-mc-gray overflow-x-auto">
+                <button
+                    onClick={() => setActiveTab('mods')}
+                    className={`pb-2 px-1 ${activeTab === 'mods' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                >
+                    Mody
+                </button>
+                <button
+                    onClick={() => setActiveTab('datapacks')}
+                    className={`pb-2 px-1 ${activeTab === 'datapacks' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                >
+                    Data Packs
+                </button>
+                <button
+                    onClick={() => setActiveTab('defaultconfigs')}
+                    className={`pb-2 px-1 ${activeTab === 'defaultconfigs' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                >
+                    Default Configs
+                </button>
             </div>
 
-            {/* Lista modów */}
-            <div className="card overflow-hidden p-0">
-                {loading ? (
-                    <div className="flex items-center justify-center h-64">
-                        <div className="loader" />
+            {activeTab === 'mods' ? (
+                <>
+                    {/* Statystyki */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="card py-4 text-center">
+                            <p className="text-2xl font-bold text-white">{stats.total}</p>
+                            <p className="text-sm text-gray-500">Wszystkich modów</p>
+                        </div>
+                        <div className="card py-4 text-center">
+                            <p className="text-2xl font-bold text-green-400">{stats.enabled}</p>
+                            <p className="text-sm text-gray-500">Włączonych</p>
+                        </div>
+                        <div className="card py-4 text-center">
+                            <p className="text-2xl font-bold text-yellow-400">{stats.required}</p>
+                            <p className="text-sm text-gray-500">Wymaganych</p>
+                        </div>
+                        <div className="card py-4 text-center">
+                            <p className="text-2xl font-bold text-blue-400">{formatBytes(stats.totalSize)}</p>
+                            <p className="text-sm text-gray-500">Łączny rozmiar</p>
+                        </div>
                     </div>
-                ) : mods.length > 0 ? (
-                    <div className="overflow-x-auto">
-                        <table className="table">
-                            <thead>
-                                <tr>
-                                    <th>Mod</th>
-                                    <th>Nazwa pliku</th>
-                                    <th>Rozmiar</th>
-                                    <th>Typ</th>
-                                    <th>Status</th>
-                                    <th className="text-right">Akcje</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {mods.map((mod) => (
-                                    <tr key={mod.id}>
-                                        <td>
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 bg-mc-gray rounded-lg flex items-center justify-center">
-                                                    <FileCode className="w-5 h-5 text-mc-green" />
-                                                </div>
-                                                <div>
-                                                    <p className="font-medium text-white">{mod.name}</p>
-                                                    {mod.description && (
-                                                        <p className="text-xs text-gray-500 truncate max-w-xs">
-                                                            {mod.description}
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td className="text-gray-400 text-sm font-mono">
-                                            {mod.filename}
-                                        </td>
-                                        <td className="text-gray-400 text-sm">
-                                            {mod.fileSizeFormatted || formatBytes(mod.file_size)}
-                                        </td>
-                                        <td>
-                                            <span className={`badge ${
-                                                mod.is_required ? 'badge-warning' : 'badge-info'
-                                            }`}>
-                                                {mod.is_required ? 'Wymagany' : 'Opcjonalny'}
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <button
-                                                onClick={() => handleToggle(mod)}
-                                                className={`flex items-center gap-1 text-sm ${
-                                                    mod.is_enabled ? 'text-green-400' : 'text-gray-500'
-                                                }`}
-                                            >
-                                                {mod.is_enabled ? (
-                                                    <ToggleRight className="w-5 h-5" />
-                                                ) : (
-                                                    <ToggleLeft className="w-5 h-5" />
-                                                )}
-                                                {mod.is_enabled ? 'Włączony' : 'Wyłączony'}
-                                            </button>
-                                        </td>
-                                        <td>
-                                            <div className="flex items-center justify-end gap-2">
-                                                {mod.url && !mod.url.startsWith('/api') && (
-                                                    <a
-                                                        href={mod.url}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="p-2 hover:bg-mc-gray rounded-lg text-gray-400 transition-colors"
-                                                        title="Otwórz link"
+
+                    {/* Lista modów */}
+                    <div className="card overflow-hidden p-0">
+                        {loading ? (
+                            <div className="flex items-center justify-center h-64">
+                                <div className="loader" />
+                            </div>
+                        ) : mods.length > 0 ? (
+                            <div className="overflow-x-auto">
+                                <table className="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Mod</th>
+                                            <th>Nazwa pliku</th>
+                                            <th>Rozmiar</th>
+                                            <th>Typ</th>
+                                            <th>Status</th>
+                                            <th className="text-right">Akcje</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {mods.map((mod) => (
+                                            <tr key={mod.id}>
+                                                <td>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-10 h-10 bg-mc-gray rounded-lg flex items-center justify-center">
+                                                            <FileCode className="w-5 h-5 text-mc-green" />
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-medium text-white">{mod.name}</p>
+                                                            {mod.description && (
+                                                                <p className="text-xs text-gray-500 truncate max-w-xs">
+                                                                    {mod.description}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="text-gray-400 text-sm font-mono">
+                                                    {mod.filename}
+                                                </td>
+                                                <td className="text-gray-400 text-sm">
+                                                    {mod.fileSizeFormatted || formatBytes(mod.file_size)}
+                                                </td>
+                                                <td>
+                                                    <span className={`badge ${
+                                                        mod.is_required ? 'badge-warning' : 'badge-info'
+                                                    }`}>
+                                                        {mod.is_required ? 'Wymagany' : 'Opcjonalny'}
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <button
+                                                        onClick={() => handleToggle(mod)}
+                                                        className={`flex items-center gap-1 text-sm ${
+                                                            mod.is_enabled ? 'text-green-400' : 'text-gray-500'
+                                                        }`}
                                                     >
-                                                        <ExternalLink className="w-4 h-4" />
-                                                    </a>
-                                                )}
-                                                <button
-                                                    onClick={() => setEditModal({ open: true, mod: { ...mod } })}
-                                                    className="p-2 hover:bg-mc-gray rounded-lg text-blue-400 transition-colors"
-                                                    title="Edytuj"
-                                                >
-                                                    <Edit2 className="w-4 h-4" />
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDelete(mod)}
-                                                    className="p-2 hover:bg-red-900/30 rounded-lg text-red-400 transition-colors"
-                                                    title="Usuń"
-                                                >
-                                                    <Trash2 className="w-4 h-4" />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                                        {mod.is_enabled ? (
+                                                            <ToggleRight className="w-5 h-5" />
+                                                        ) : (
+                                                            <ToggleLeft className="w-5 h-5" />
+                                                        )}
+                                                        {mod.is_enabled ? 'Włączony' : 'Wyłączony'}
+                                                    </button>
+                                                </td>
+                                                <td>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        {mod.url && !mod.url.startsWith('/api') && (
+                                                            <a
+                                                                href={mod.url}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="p-2 hover:bg-mc-gray rounded-lg text-gray-400 transition-colors"
+                                                                title="Otwórz link"
+                                                            >
+                                                                <ExternalLink className="w-4 h-4" />
+                                                            </a>
+                                                        )}
+                                                        <button
+                                                            onClick={() => setEditModal({ open: true, mod: { ...mod } })}
+                                                            className="p-2 hover:bg-mc-gray rounded-lg text-blue-400 transition-colors"
+                                                            title="Edytuj"
+                                                        >
+                                                            <Edit2 className="w-4 h-4" />
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleDelete(mod)}
+                                                            className="p-2 hover:bg-red-900/30 rounded-lg text-red-400 transition-colors"
+                                                            title="Usuń"
+                                                        >
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div className="text-center py-12">
+                                <Package className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                                <p className="text-gray-500">Brak modów</p>
+                                <p className="text-gray-600 text-sm">Dodaj pierwszy mod klikając przycisk powyżej</p>
+                            </div>
+                        )}
                     </div>
-                ) : (
-                    <div className="text-center py-12">
-                        <Package className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-                        <p className="text-gray-500">Brak modów</p>
-                        <p className="text-gray-600 text-sm">Dodaj pierwszy mod klikając przycisk powyżej</p>
-                    </div>
-                )}
-            </div>
+                </>
+            ) : activeTab === 'datapacks' ? (
+                <FileManager type="datapacks" title="Data Packs" />
+            ) : (
+                <FileManager type="defaultconfigs" title="Default Configs" />
+            )}
 
             {/* Modal uploadu */}
             {uploadModal && (
