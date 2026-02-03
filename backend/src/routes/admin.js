@@ -107,6 +107,24 @@ router.use(adminLimiter);
 router.use(authenticateAdmin);
 
 // ============================================
+// INFORMACJE O ADMINIE
+// ============================================
+
+/**
+ * GET /api/admin/me
+ * Pobiera dane aktualnie zalogowanego administratora
+ */
+router.get('/me', asyncHandler(async (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            id: req.admin.id,
+            username: req.admin.username
+        }
+    });
+}));
+
+// ============================================
 // DASHBOARD / STATYSTYKI
 // ============================================
 
