@@ -43,6 +43,8 @@ const elements = {
     progressText: document.getElementById('progress-text'),
     progressPercent: document.getElementById('progress-percent'),
     progressFill: document.getElementById('progress-fill'),
+    progressSize: document.getElementById('progress-size'),
+    progressSpeed: document.getElementById('progress-speed'),
     progressDetails: document.getElementById('progress-details'),
     btnPlay: document.getElementById('btn-play'),
     playSubtext: document.getElementById('play-subtext'),
@@ -472,6 +474,10 @@ async function handlePlay() {
     elements.progressContainer.style.display = 'block';
     elements.btnPlay.disabled = true;
 
+    // Reset statystyk
+    elements.progressSize.textContent = '';
+    elements.progressSpeed.textContent = '';
+
     try {
         await gameLauncher.launch(
             {
@@ -480,16 +486,24 @@ async function handlePlay() {
             },
             settings,
             {
-                onProgress: (percent, details) => {
+                onProgress: (percent, details, stats) => {
                     elements.progressFill.style.width = `${percent}%`;
                     elements.progressPercent.textContent = `${percent}%`;
                     elements.progressDetails.textContent = details || '';
+
+                    // Wyświetl rozmiar i prędkość
+                    if (stats && stats.downloadedBytes !== undefined) {
+                        elements.progressSize.textContent = `${formatBytes(stats.downloadedBytes)} / ${formatBytes(stats.totalBytes)}`;
+                    }
+                    if (stats && stats.speed !== undefined) {
+                        elements.progressSpeed.textContent = `${formatBytes(stats.speed)}/s`;
+                    }
                 },
                 onStatusChange: (status) => {
                     elements.progressText.textContent = status;
                 },
                 onComplete: (result) => {
-                    showToast('Gra uruchomiona!', 'success');
+                    showToast('Łączenie z serwerem...', 'success');
                     elements.progressContainer.style.display = 'none';
                     elements.btnPlay.disabled = false;
                 },
@@ -505,6 +519,17 @@ async function handlePlay() {
         elements.progressContainer.style.display = 'none';
         elements.btnPlay.disabled = false;
     }
+}
+
+/**
+ * Formatuje bajty do czytelnej formy (KB, MB, GB)
+ */
+function formatBytes(bytes) {
+    if (bytes === 0 || bytes === undefined) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 // ============================================
