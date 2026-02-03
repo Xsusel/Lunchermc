@@ -822,4 +822,60 @@ router.get('/logs', asyncHandler(async (req, res) => {
     });
 }));
 
+/**
+ * POST /api/admin/mods/sync
+ * Synchronizuje listę modów z plikami na dysku
+ */
+router.post('/mods/sync', asyncHandler(async (req, res) => {
+    const modsPath = getModsPath();
+    ensureDir(modsPath);
+
+    const filesOnDisk = fs.readdirSync(modsPath).filter(f =>
+        f.endsWith('.jar') || f.endsWith('.zip')
+    );
+
+    const modsInDb = Mod.getAll();
+    const dbFilenames = new Set(modsInDb.map(m => m.filename));
+    const diskFilenames = new Set(filesOnDisk);
+
+    const results = { added: 0, removed: 0 };
+
+    // 1. Dodaj nowe pliki
+    for (const filename of filesOnDisk) {
+        if (!dbFilenames.has(filename)) {
+            const filePath = path.join(modsPath, filename);
+            const sha256 = await calculateSHA256(filePath);
+            const stats = fs.statSync(filePath);
+
+            Mod.create({
+                name: filename.replace(/\.[^.]+$/, ''),
+                filename,
+                url: `/api/download/mods/${filename}`,
+                sha256,
+                file_size: stats.size,
+                is_required: true,
+                mod_type: 'mod',
+                description: 'Zsynchornizowano automatycznie'
+            });
+            results.added++;
+        }
+    }
+
+    // 2. Usuń nieistniejące pliki z bazy (tylko te lokalne)
+    for (const mod of modsInDb) {
+        if (mod.url && mod.url.startsWith('/api/download/mods/') && !diskFilenames.has(mod.filename)) {
+            Mod.delete(mod.id);
+            results.removed++;
+        }
+    }
+
+    ActivityLog.logAdminAction('mods_sync', results, getClientIp(req));
+
+    res.json({
+        success: true,
+        message: `Synchronizacja zakończona: Dodano ${results.added}, usunięto ${results.removed}`,
+        data: results
+    });
+}));
+
 export default router;
