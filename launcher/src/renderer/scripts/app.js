@@ -38,13 +38,17 @@ const elements = {
     broadcastsContainer: document.getElementById('broadcasts-container'),
     serverStatusIndicator: document.getElementById('server-status-indicator'),
     serverAddress: document.getElementById('server-address'),
+    serverPing: document.getElementById('server-ping'),
+    playersOnline: document.getElementById('players-online'),
     gameVersion: document.getElementById('game-version'),
+    modsCount: document.getElementById('mods-count'),
     progressContainer: document.getElementById('progress-container'),
     progressText: document.getElementById('progress-text'),
     progressPercent: document.getElementById('progress-percent'),
     progressFill: document.getElementById('progress-fill'),
     progressSize: document.getElementById('progress-size'),
     progressSpeed: document.getElementById('progress-speed'),
+    progressEta: document.getElementById('progress-eta'),
     progressDetails: document.getElementById('progress-details'),
     btnPlay: document.getElementById('btn-play'),
     playSubtext: document.getElementById('play-subtext'),
@@ -413,6 +417,12 @@ async function loadServerConfig() {
             }
             elements.gameVersion.textContent = versionText;
 
+            // Liczba modów
+            const modsCount = response.data.mods?.filter(m => m.is_enabled).length || 0;
+            if (elements.modsCount) {
+                elements.modsCount.textContent = modsCount;
+            }
+
             // Status serwera
             if (config.maintenanceMode) {
                 elements.serverStatusIndicator.className = 'status-indicator maintenance';
@@ -424,6 +434,9 @@ async function loadServerConfig() {
 
             // Wyświetl powiadomienia
             displayBroadcasts(response.data.broadcasts);
+
+            // Pobierz status serwera MC (ping, gracze)
+            loadServerStatus();
         }
     } catch (error) {
         console.error('Błąd ładowania konfiguracji:', error);
@@ -432,6 +445,56 @@ async function loadServerConfig() {
         state.serverOnline = false;
 
         showToast('Nie można połączyć z serwerem', 'error');
+    }
+}
+
+/**
+ * Pobiera status serwera MC (ping, gracze online)
+ */
+async function loadServerStatus() {
+    try {
+        const response = await api.getServerStatus();
+
+        if (response.success && response.data) {
+            const data = response.data;
+
+            // Aktualizuj ping
+            if (elements.serverPing) {
+                const pingValue = elements.serverPing.querySelector('.ping-value');
+                if (data.online && data.latency) {
+                    pingValue.textContent = `${data.latency}ms`;
+                    elements.serverPing.classList.remove('offline');
+                    elements.serverPing.classList.add('online');
+                } else {
+                    pingValue.textContent = '--';
+                    elements.serverPing.classList.remove('online');
+                    elements.serverPing.classList.add('offline');
+                }
+            }
+
+            // Aktualizuj liczbę graczy
+            if (elements.playersOnline) {
+                if (data.online && data.players) {
+                    elements.playersOnline.textContent = `${data.players.online}/${data.players.max}`;
+                } else {
+                    elements.playersOnline.textContent = '0';
+                }
+            }
+
+            // Aktualizuj status serwera
+            if (data.maintenanceMode) {
+                elements.serverStatusIndicator.className = 'status-indicator maintenance';
+                state.serverOnline = false;
+            } else if (data.online) {
+                elements.serverStatusIndicator.className = 'status-indicator online';
+                state.serverOnline = true;
+            } else {
+                elements.serverStatusIndicator.className = 'status-indicator offline';
+                state.serverOnline = false;
+            }
+        }
+    } catch (error) {
+        console.error('Błąd pobierania statusu serwera:', error);
     }
 }
 
@@ -477,6 +540,7 @@ async function handlePlay() {
     // Reset statystyk
     elements.progressSize.textContent = '';
     elements.progressSpeed.textContent = '';
+    if (elements.progressEta) elements.progressEta.textContent = '';
 
     try {
         await gameLauncher.launch(
@@ -495,8 +559,15 @@ async function handlePlay() {
                     if (stats && stats.downloadedBytes !== undefined) {
                         elements.progressSize.textContent = `${formatBytes(stats.downloadedBytes)} / ${formatBytes(stats.totalBytes)}`;
                     }
-                    if (stats && stats.speed !== undefined) {
+                    if (stats && stats.speed !== undefined && stats.speed > 0) {
                         elements.progressSpeed.textContent = `${formatBytes(stats.speed)}/s`;
+
+                        // Oblicz ETA
+                        if (elements.progressEta && stats.totalBytes > 0) {
+                            const remaining = stats.totalBytes - stats.downloadedBytes;
+                            const eta = remaining / stats.speed;
+                            elements.progressEta.textContent = formatTime(eta);
+                        }
                     }
                 },
                 onStatusChange: (status) => {
@@ -530,6 +601,23 @@ function formatBytes(bytes) {
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+/**
+ * Formatuje czas w sekundach do czytelnej formy (mm:ss lub hh:mm:ss)
+ */
+function formatTime(seconds) {
+    if (!seconds || seconds <= 0 || !isFinite(seconds)) return '--:--';
+
+    seconds = Math.ceil(seconds);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
 
 // ============================================
@@ -696,3 +784,6 @@ function escapeHtml(text) {
 
 // Odświeżaj konfigurację co 5 minut
 setInterval(loadServerConfig, 5 * 60 * 1000);
+
+// Odświeżaj status serwera MC co 30 sekund
+setInterval(loadServerStatus, 30 * 1000);
