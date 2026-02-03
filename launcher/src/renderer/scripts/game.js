@@ -14,6 +14,16 @@ class GameLauncher {
         this.currentTask = '';
         this.javaInstallations = [];
 
+        // Statystyki pobierania
+        this.downloadStats = {
+            startTime: 0,
+            lastTime: 0,
+            lastBytes: 0,
+            speed: 0,
+            totalBytes: 0,
+            downloadedBytes: 0
+        };
+
         // Zarejestruj listenery
         this.setupListeners();
     }
@@ -25,9 +35,33 @@ class GameLauncher {
         // Postep pobierania
         window.electronAPI.onDownloadProgress((data) => {
             this.downloadProgress = data;
+
+            // Oblicz prędkość pobierania
+            const now = Date.now();
+            if (data.bytes !== undefined) {
+                // Mamy dokładne bajty
+                this.downloadStats.downloadedBytes = data.bytes;
+                this.downloadStats.totalBytes = data.totalBytes || 0;
+
+                // Oblicz prędkość (średnia z ostatniej sekundy)
+                if (this.downloadStats.lastTime > 0) {
+                    const timeDiff = (now - this.downloadStats.lastTime) / 1000;
+                    if (timeDiff > 0) {
+                        const bytesDiff = data.bytes - this.downloadStats.lastBytes;
+                        this.downloadStats.speed = Math.round(bytesDiff / timeDiff);
+                    }
+                }
+                this.downloadStats.lastTime = now;
+                this.downloadStats.lastBytes = data.bytes;
+            }
+
             if (this.onProgressCallback) {
                 const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
-                this.onProgressCallback(percent, data.name || data.task || 'Pobieranie...');
+                this.onProgressCallback(percent, data.name || data.task || 'Pobieranie...', {
+                    downloadedBytes: this.downloadStats.downloadedBytes,
+                    totalBytes: this.downloadStats.totalBytes,
+                    speed: this.downloadStats.speed
+                });
             }
         });
 

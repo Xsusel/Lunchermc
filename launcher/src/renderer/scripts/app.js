@@ -38,11 +38,17 @@ const elements = {
     broadcastsContainer: document.getElementById('broadcasts-container'),
     serverStatusIndicator: document.getElementById('server-status-indicator'),
     serverAddress: document.getElementById('server-address'),
+    serverPing: document.getElementById('server-ping'),
+    playersOnline: document.getElementById('players-online'),
     gameVersion: document.getElementById('game-version'),
+    modsCount: document.getElementById('mods-count'),
     progressContainer: document.getElementById('progress-container'),
     progressText: document.getElementById('progress-text'),
     progressPercent: document.getElementById('progress-percent'),
     progressFill: document.getElementById('progress-fill'),
+    progressSize: document.getElementById('progress-size'),
+    progressSpeed: document.getElementById('progress-speed'),
+    progressEta: document.getElementById('progress-eta'),
     progressDetails: document.getElementById('progress-details'),
     btnPlay: document.getElementById('btn-play'),
     playSubtext: document.getElementById('play-subtext'),
@@ -370,8 +376,13 @@ function updateUserUI() {
         elements.userName.textContent = state.user.username;
         elements.userStatus.textContent = 'Kliknij aby się wylogować';
         elements.userAvatar.textContent = state.user.username[0].toUpperCase();
-        elements.btnPlay.disabled = false;
-        elements.playSubtext.textContent = 'Kliknij aby rozpocząć';
+        elements.btnPlay.disabled = !state.serverOnline;
+
+        if (state.serverOnline) {
+            elements.playSubtext.textContent = 'Kliknij aby rozpocząć';
+        } else {
+            elements.playSubtext.textContent = 'Serwer niedostępny';
+        }
     } else {
         elements.userName.textContent = 'Niezalogowany';
         elements.userStatus.textContent = 'Kliknij aby się zalogować';
@@ -411,6 +422,12 @@ async function loadServerConfig() {
             }
             elements.gameVersion.textContent = versionText;
 
+            // Liczba modów
+            const modsCount = response.data.mods?.filter(m => m.is_enabled).length || 0;
+            if (elements.modsCount) {
+                elements.modsCount.textContent = modsCount;
+            }
+
             // Status serwera
             if (config.maintenanceMode) {
                 elements.serverStatusIndicator.className = 'status-indicator maintenance';
@@ -422,6 +439,9 @@ async function loadServerConfig() {
 
             // Wyświetl powiadomienia
             displayBroadcasts(response.data.broadcasts);
+
+            // Pobierz status serwera MC (ping, gracze)
+            loadServerStatus();
         }
     } catch (error) {
         console.error('Błąd ładowania konfiguracji:', error);
@@ -430,6 +450,59 @@ async function loadServerConfig() {
         state.serverOnline = false;
 
         showToast('Nie można połączyć z serwerem', 'error');
+    }
+}
+
+/**
+ * Pobiera status serwera MC (ping, gracze online)
+ */
+async function loadServerStatus() {
+    try {
+        const response = await api.getServerStatus();
+
+        if (response.success && response.data) {
+            const data = response.data;
+
+            // Aktualizuj ping
+            if (elements.serverPing) {
+                const pingValue = elements.serverPing.querySelector('.ping-value');
+                if (data.online && data.latency) {
+                    pingValue.textContent = `${data.latency}ms`;
+                    elements.serverPing.classList.remove('offline');
+                    elements.serverPing.classList.add('online');
+                } else {
+                    pingValue.textContent = '--';
+                    elements.serverPing.classList.remove('online');
+                    elements.serverPing.classList.add('offline');
+                }
+            }
+
+            // Aktualizuj liczbę graczy
+            if (elements.playersOnline) {
+                if (data.online && data.players) {
+                    elements.playersOnline.textContent = `${data.players.online}/${data.players.max}`;
+                } else {
+                    elements.playersOnline.textContent = '0';
+                }
+            }
+
+            // Aktualizuj status serwera
+            if (data.maintenanceMode) {
+                elements.serverStatusIndicator.className = 'status-indicator maintenance';
+                state.serverOnline = false;
+            } else if (data.online) {
+                elements.serverStatusIndicator.className = 'status-indicator online';
+                state.serverOnline = true;
+            } else {
+                elements.serverStatusIndicator.className = 'status-indicator offline';
+                state.serverOnline = false;
+            }
+
+            // Aktualizuj przycisk graj
+            updateUserUI();
+        }
+    } catch (error) {
+        console.error('Błąd pobierania statusu serwera:', error);
     }
 }
 
@@ -472,6 +545,11 @@ async function handlePlay() {
     elements.progressContainer.style.display = 'block';
     elements.btnPlay.disabled = true;
 
+    // Reset statystyk
+    elements.progressSize.textContent = '';
+    elements.progressSpeed.textContent = '';
+    if (elements.progressEta) elements.progressEta.textContent = '';
+
     try {
         await gameLauncher.launch(
             {
@@ -480,31 +558,98 @@ async function handlePlay() {
             },
             settings,
             {
-                onProgress: (percent, details) => {
+                onProgress: (percent, details, stats) => {
                     elements.progressFill.style.width = `${percent}%`;
                     elements.progressPercent.textContent = `${percent}%`;
                     elements.progressDetails.textContent = details || '';
+
+                    // Wyświetl rozmiar i prędkość
+                    if (stats && stats.downloadedBytes !== undefined) {
+                        elements.progressSize.textContent = `${formatBytes(stats.downloadedBytes)} / ${formatBytes(stats.totalBytes)}`;
+                    }
+                    if (stats && stats.speed !== undefined && stats.speed > 0) {
+                        elements.progressSpeed.textContent = `${formatBytes(stats.speed)}/s`;
+
+                        // Oblicz ETA
+                        if (elements.progressEta && stats.totalBytes > 0) {
+                            const remaining = stats.totalBytes - stats.downloadedBytes;
+                            const eta = remaining / stats.speed;
+                            elements.progressEta.textContent = formatTime(eta);
+                        }
+                    }
                 },
                 onStatusChange: (status) => {
                     elements.progressText.textContent = status;
                 },
                 onComplete: (result) => {
-                    showToast('Gra uruchomiona!', 'success');
+                    showToast('Łączenie z serwerem...', 'success');
                     elements.progressContainer.style.display = 'none';
                     elements.btnPlay.disabled = false;
                 },
                 onError: (error) => {
-                    showToast(error, 'error');
+                    showToast(translateError(error), 'error');
                     elements.progressContainer.style.display = 'none';
                     elements.btnPlay.disabled = false;
                 }
             }
         );
     } catch (error) {
-        showToast(error.message, 'error');
+        showToast(translateError(error.message), 'error');
         elements.progressContainer.style.display = 'none';
         elements.btnPlay.disabled = false;
     }
+}
+
+/**
+ * Tłumaczy komunikaty błędów na bardziej przyjazne
+ */
+function translateError(error) {
+    const translations = {
+        'Nie znaleziono Java': 'Nie znaleziono Java. Zainstaluj Java 17 lub nowszą.',
+        'Brak połączenia z serwerem': 'Brak połączenia z serwerem. Sprawdź połączenie internetowe.',
+        'Network Error': 'Błąd sieci. Sprawdź połączenie internetowe.',
+        'Failed to fetch': 'Nie można połączyć z serwerem.',
+        'Connection timeout': 'Przekroczono czas oczekiwania na połączenie.',
+        'Serwer jest w trybie konserwacji': 'Serwer jest w trybie konserwacji. Spróbuj później.',
+        'Nie można pobrać konfiguracji serwera': 'Nie można pobrać konfiguracji. Spróbuj ponownie.',
+        'Download timeout': 'Pobieranie trwało za długo. Spróbuj ponownie.'
+    };
+
+    for (const [key, value] of Object.entries(translations)) {
+        if (error && error.includes(key)) {
+            return value;
+        }
+    }
+
+    return error || 'Wystąpił nieoczekiwany błąd';
+}
+
+/**
+ * Formatuje bajty do czytelnej formy (KB, MB, GB)
+ */
+function formatBytes(bytes) {
+    if (bytes === 0 || bytes === undefined) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+/**
+ * Formatuje czas w sekundach do czytelnej formy (mm:ss lub hh:mm:ss)
+ */
+function formatTime(seconds) {
+    if (!seconds || seconds <= 0 || !isFinite(seconds)) return '--:--';
+
+    seconds = Math.ceil(seconds);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
 
 // ============================================
@@ -671,3 +816,6 @@ function escapeHtml(text) {
 
 // Odświeżaj konfigurację co 5 minut
 setInterval(loadServerConfig, 5 * 60 * 1000);
+
+// Odświeżaj status serwera MC co 30 sekund
+setInterval(loadServerStatus, 30 * 1000);
