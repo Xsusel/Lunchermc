@@ -171,6 +171,40 @@ export const modsApi = {
     delete: async (id) => {
         const response = await api.delete(`/admin/mods/${id}`);
         return response.data;
+    },
+
+    // Synchronizacja z dyskiem
+    sync: async () => {
+        const response = await api.post('/admin/mods/sync');
+        return response.data;
+    }
+};
+
+export const filesApi = {
+    // Lista plików
+    getAll: async (type) => {
+        const response = await api.get(`/admin/files?type=${type}`);
+        return response.data;
+    },
+
+    // Dodawanie pliku
+    upload: async (type, formData) => {
+        const response = await api.post(`/admin/files?type=${type}`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        return response.data;
+    },
+
+    // Przełączanie statusu
+    toggle: async (id) => {
+        const response = await api.post(`/admin/files/${id}/toggle`);
+        return response.data;
+    },
+
+    // Usuwanie pliku
+    delete: async (id) => {
+        const response = await api.delete(`/admin/files/${id}`);
+        return response.data;
     }
 };
 

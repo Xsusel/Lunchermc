@@ -24,8 +24,9 @@ const FILES_BASE_PATH = path.join(__dirname, '../../uploads');
 
 // Typy plików i ich foldery
 const FILE_TYPES = {
-    mods: { folder: 'mods', extensions: ['.jar', '.zip'] },
-    configs: { folder: 'configs', extensions: ['.json', '.toml', '.cfg', '.properties', '.txt', '.yaml', '.yml'] },
+    datapacks: { folder: 'datapacks', extensions: ['.zip', '.json', '.mcfunction'] },
+    defaultconfigs: { folder: 'defaultconfigs', extensions: ['.json', '.toml', '.cfg', '.properties', '.txt', '.yaml', '.yml'] },
+    configs: { folder: 'config', extensions: ['.json', '.toml', '.cfg', '.properties', '.txt', '.yaml', '.yml'] },
     resourcepacks: { folder: 'resourcepacks', extensions: ['.zip'] },
     shaderpacks: { folder: 'shaderpacks', extensions: ['.zip'] },
     scripts: { folder: 'scripts', extensions: ['.zs', '.js'] }
