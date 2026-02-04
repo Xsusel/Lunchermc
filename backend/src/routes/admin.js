@@ -9,7 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import {
-    User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion
+    User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion, PlayerStats
 } from '../models/index.js';
 import { authenticateAdmin, generateAdminToken, adminLimiter, authLimiter } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -880,6 +880,192 @@ router.post('/mods/sync', asyncHandler(async (req, res) => {
         data: results
     });
 }));
+
+// ============================================
+// STATYSTYKI GRACZY
+// ============================================
+
+/**
+ * GET /api/admin/stats
+ * Ogólne statystyki serwera
+ */
+router.get('/stats',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const serverStats = PlayerStats.getServerStats();
+        const activitySummary = PlayerStats.getActivitySummary();
+
+        res.json({
+            success: true,
+            data: {
+                ...serverStats,
+                activity: activitySummary
+            }
+        });
+    })
+);
+
+/**
+ * GET /api/admin/stats/players/top
+ * Top graczy według czasu gry
+ */
+router.get('/stats/players/top',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+        const players = PlayerStats.getTopPlayersByPlaytime(limit);
+
+        res.json({
+            success: true,
+            data: players
+        });
+    })
+);
+
+/**
+ * GET /api/admin/stats/players/newest
+ * Najnowsi gracze
+ */
+router.get('/stats/players/newest',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+        const players = PlayerStats.getNewestPlayers(limit);
+
+        res.json({
+            success: true,
+            data: players
+        });
+    })
+);
+
+/**
+ * GET /api/admin/stats/players/active
+ * Ostatnio aktywni gracze
+ */
+router.get('/stats/players/active',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+        const players = PlayerStats.getRecentlyActivePlayers(limit);
+
+        res.json({
+            success: true,
+            data: players
+        });
+    })
+);
+
+/**
+ * GET /api/admin/stats/registrations
+ * Statystyki rejestracji w czasie
+ */
+router.get('/stats/registrations',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const days = Math.min(parseInt(req.query.days) || 30, 365);
+        const stats = PlayerStats.getRegistrationStats(days);
+
+        res.json({
+            success: true,
+            data: stats
+        });
+    })
+);
+
+/**
+ * GET /api/admin/stats/activity
+ * Statystyki aktywności w czasie
+ */
+router.get('/stats/activity',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const days = Math.min(parseInt(req.query.days) || 30, 365);
+        const stats = PlayerStats.getActivityStats(days);
+
+        res.json({
+            success: true,
+            data: stats
+        });
+    })
+);
+
+/**
+ * GET /api/admin/stats/playtime
+ * Rozkład czasu gry
+ */
+router.get('/stats/playtime',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const distribution = PlayerStats.getPlaytimeDistribution();
+
+        res.json({
+            success: true,
+            data: distribution
+        });
+    })
+);
+
+/**
+ * GET /api/admin/stats/players/:id
+ * Szczegółowe statystyki gracza
+ */
+router.get('/stats/players/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą całkowitą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const { id } = req.params;
+        const player = PlayerStats.getPlayerDetails(parseInt(id));
+
+        if (!player) {
+            return res.status(404).json({
+                success: false,
+                error: 'Gracz nie znaleziony'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: player
+        });
+    })
+);
+
+/**
+ * GET /api/admin/stats/players/search
+ * Wyszukiwanie graczy
+ */
+router.get('/stats/players/search',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const { q } = req.query;
+        if (!q || q.length < 2) {
+            return res.status(400).json({
+                success: false,
+                error: 'Query musi mieć minimum 2 znaki'
+            });
+        }
+
+        const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+        const players = PlayerStats.searchPlayers(q, limit);
+
+        res.json({
+            success: true,
+            data: players
+        });
+    })
+);
 
 // ============================================
 // BACKUP BAZY DANYCH

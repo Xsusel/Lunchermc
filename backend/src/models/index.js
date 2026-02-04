@@ -9,3 +9,4 @@ export { default as Mod } from './Mod.js';
 export { default as Broadcast } from './Broadcast.js';
 export { default as ActivityLog } from './ActivityLog.js';
 export { default as LauncherVersion } from './LauncherVersion.js';
+export { default as PlayerStats } from './PlayerStats.js';
