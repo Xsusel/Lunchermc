@@ -6,6 +6,8 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 const GameManager = require('./gameManager');
+const discordRPC = require('./discordRPC');
+const { getChangelog, getLatestChangelog } = require('./changelog');
 
 // Auto-updater (opcjonalny)
 let autoUpdater;
@@ -47,7 +49,16 @@ const store = new Store({
         // Ustawienia launchera
         launcherVersion: '1.0.0',
         autoUpdate: true,
-        theme: 'dark'
+        theme: 'dark',
+
+        // Discord Rich Presence
+        discordRPC: {
+            enabled: true,
+            clientId: '' // Użytkownik może podać własne Client ID
+        },
+
+        // Changelog - ostatnia widziana wersja
+        lastSeenVersion: ''
     }
 });
 
@@ -219,8 +230,21 @@ ipcMain.handle('get-launcher-version', () => {
 // INICJALIZACJA APLIKACJI
 // ============================================
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     createWindow();
+
+    // Inicjalizuj Discord RPC
+    const discordSettings = store.get('discordRPC');
+    if (discordSettings?.enabled) {
+        try {
+            const clientId = discordSettings.clientId || null;
+            await discordRPC.init(clientId);
+            discordRPC.setEnabled(true);
+            console.log('[Discord RPC] Initialized');
+        } catch (error) {
+            console.warn('[Discord RPC] Failed to initialize:', error.message);
+        }
+    }
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
@@ -229,10 +253,17 @@ app.whenReady().then(() => {
     });
 });
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
+    // Zamknij Discord RPC
+    await discordRPC.destroy();
+
     if (process.platform !== 'darwin') {
         app.quit();
     }
+});
+
+app.on('before-quit', async () => {
+    await discordRPC.destroy();
 });
 
 // ============================================
@@ -266,3 +297,96 @@ if (autoUpdater) {
 ipcMain.handle('is-game-running', () => {
     return gameManager ? gameManager.gameProcess !== null : false;
 });
+
+// ============================================
+// DISCORD RICH PRESENCE IPC HANDLERS
+// ============================================
+
+// Włącz/wyłącz Discord RPC
+ipcMain.handle('discord-rpc-set-enabled', async (event, enabled) => {
+    store.set('discordRPC.enabled', enabled);
+    discordRPC.setEnabled(enabled);
+
+    // Jeśli włączamy i nie jesteśmy połączeni, spróbuj połączyć
+    if (enabled && !discordRPC.isConnected()) {
+        const clientId = store.get('discordRPC.clientId') || null;
+        await discordRPC.init(clientId);
+    }
+
+    return { success: true, enabled };
+});
+
+// Ustaw Client ID
+ipcMain.handle('discord-rpc-set-client-id', async (event, clientId) => {
+    store.set('discordRPC.clientId', clientId);
+
+    // Restart RPC z nowym ID
+    if (discordRPC.isEnabled()) {
+        await discordRPC.destroy();
+        await discordRPC.init(clientId);
+    }
+
+    return { success: true };
+});
+
+// Pobierz status Discord RPC
+ipcMain.handle('discord-rpc-get-status', () => {
+    return {
+        enabled: discordRPC.isEnabled(),
+        connected: discordRPC.isConnected(),
+        clientId: store.get('discordRPC.clientId') || ''
+    };
+});
+
+// Ustaw nazwę użytkownika (dla prezencji)
+ipcMain.handle('discord-rpc-set-username', (event, username) => {
+    discordRPC.setUsername(username);
+    return { success: true };
+});
+
+// Ustaw nazwę serwera
+ipcMain.handle('discord-rpc-set-server', (event, serverName) => {
+    discordRPC.setServerName(serverName);
+    return { success: true };
+});
+
+// ============================================
+// CHANGELOG IPC HANDLERS
+// ============================================
+
+// Pobierz changelog dla aktualnej wersji
+ipcMain.handle('get-changelog', () => {
+    return getLatestChangelog();
+});
+
+// Pobierz changelog dla konkretnej wersji
+ipcMain.handle('get-changelog-version', (event, version) => {
+    return getChangelog(version);
+});
+
+// Sprawdź czy pokazać changelog (nowa wersja)
+ipcMain.handle('should-show-changelog', () => {
+    const currentVersion = app.getVersion();
+    const lastSeenVersion = store.get('lastSeenVersion');
+
+    // Jeśli to pierwsza instalacja lub nowa wersja
+    if (!lastSeenVersion || lastSeenVersion !== currentVersion) {
+        return {
+            show: true,
+            version: currentVersion,
+            changelog: getChangelog(currentVersion) || getLatestChangelog()
+        };
+    }
+
+    return { show: false };
+});
+
+// Oznacz changelog jako widziany
+ipcMain.handle('mark-changelog-seen', () => {
+    const currentVersion = app.getVersion();
+    store.set('lastSeenVersion', currentVersion);
+    return { success: true };
+});
+
+// Eksportuj discordRPC dla GameManager
+module.exports = { discordRPC };

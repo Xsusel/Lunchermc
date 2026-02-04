@@ -1181,6 +1181,122 @@ body {
 }
 
 /* ============================================
+   CHANGELOG MODAL
+   ============================================ */
+.modal-changelog {
+    max-width: 550px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-changelog .modal-title {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.modal-changelog .modal-title svg {
+    color: var(--accent);
+}
+
+#changelog-version {
+    color: var(--accent);
+}
+
+.changelog-content {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 8px;
+    margin-bottom: 20px;
+}
+
+.changelog-section {
+    margin-bottom: 20px;
+}
+
+.changelog-section:last-child {
+    margin-bottom: 0;
+}
+
+.changelog-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+}
+
+.changelog-section-title.new {
+    color: var(--success);
+}
+
+.changelog-section-title.improved {
+    color: var(--info);
+}
+
+.changelog-section-title.fixed {
+    color: var(--warning);
+}
+
+.changelog-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.changelog-list li {
+    position: relative;
+    padding-left: 20px;
+    padding-bottom: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.changelog-list li:last-child {
+    padding-bottom: 0;
+}
+
+.changelog-list li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 7px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.changelog-section-title.new + .changelog-list li::before {
+    background: var(--success);
+}
+
+.changelog-section-title.improved + .changelog-list li::before {
+    background: var(--info);
+}
+
+.changelog-section-title.fixed + .changelog-list li::before {
+    background: var(--warning);
+}
+
+.changelog-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.changelog-footer .btn-primary {
+    min-width: 120px;
+}
+
+/* ============================================
    SCROLLBAR
    ============================================ */
 ::-webkit-scrollbar {
