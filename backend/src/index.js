@@ -96,7 +96,7 @@ app.get('/api', (req, res) => {
     });
 });
 
-// Health check
+// Health check - prosty
 app.get('/api/health', (req, res) => {
     res.json({
         success: true,
@@ -105,6 +105,105 @@ app.get('/api/health', (req, res) => {
         uptime: process.uptime()
     });
 });
+
+// Health check - rozszerzony (dla monitoringu)
+app.get('/api/health/detailed', async (req, res) => {
+    const os = await import('os');
+    const fs = await import('fs');
+
+    // Informacje o pamięci
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+
+    // Informacje o procesie
+    const processMemory = process.memoryUsage();
+
+    // Sprawdź status bazy danych
+    let dbStatus = 'unknown';
+    try {
+        const db = (await import('./config/database.js')).default;
+        db.prepare('SELECT 1').get();
+        dbStatus = 'connected';
+    } catch (error) {
+        dbStatus = 'error: ' + error.message;
+    }
+
+    // Sprawdź dysk (folder uploads)
+    let diskStatus = { available: 0, total: 0 };
+    try {
+        const uploadsPath = getUploadsPath();
+        const stats = fs.statSync(uploadsPath);
+        // Na Linuxie możemy użyć statfs, ale tu uproszczenie
+        diskStatus = { path: uploadsPath, writable: true };
+    } catch (error) {
+        diskStatus = { error: error.message };
+    }
+
+    // WebSocket status
+    const wsStats = wsManager.getStats();
+
+    res.json({
+        success: true,
+        status: dbStatus === 'connected' ? 'healthy' : 'degraded',
+        timestamp: new Date().toISOString(),
+        uptime: {
+            seconds: Math.floor(process.uptime()),
+            formatted: formatUptime(process.uptime())
+        },
+        system: {
+            platform: os.platform(),
+            arch: os.arch(),
+            nodeVersion: process.version,
+            cpuCount: os.cpus().length,
+            loadAverage: os.loadavg()
+        },
+        memory: {
+            system: {
+                total: formatBytes(totalMem),
+                free: formatBytes(freeMem),
+                used: formatBytes(usedMem),
+                usagePercent: Math.round((usedMem / totalMem) * 100)
+            },
+            process: {
+                heapUsed: formatBytes(processMemory.heapUsed),
+                heapTotal: formatBytes(processMemory.heapTotal),
+                rss: formatBytes(processMemory.rss),
+                external: formatBytes(processMemory.external)
+            }
+        },
+        database: {
+            status: dbStatus
+        },
+        websocket: wsStats,
+        disk: diskStatus,
+        env: process.env.NODE_ENV || 'development'
+    });
+});
+
+// Helper funkcje
+function formatUptime(seconds) {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    parts.push(`${secs}s`);
+
+    return parts.join(' ');
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
 
 // Trasy z rate limitingiem
 app.use('/api/auth', apiLimiter, authRoutes);
