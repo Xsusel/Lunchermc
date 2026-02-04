@@ -15,7 +15,7 @@ import { authenticateAdmin, generateAdminToken, adminLimiter, authLimiter } from
 import { asyncHandler } from '../middleware/errorHandler.js';
 import {
     calculateSHA256, sanitizeFilename, isAllowedModFile,
-    getModsPath, ensureDir, getClientIp, formatFileSize
+    getModsPath, ensureDir, getClientIp, formatFileSize, verifyFileSHA256
 } from '../utils/helpers.js';
 import {
     createBackup, listBackups, restoreBackup, deleteBackup, getBackupStats
@@ -880,6 +880,179 @@ router.post('/mods/sync', asyncHandler(async (req, res) => {
         data: results
     });
 }));
+
+/**
+ * POST /api/admin/mods/verify
+ * Weryfikuje integralność wszystkich modów na serwerze
+ * Porównuje pliki z sumami SHA256 w bazie danych
+ */
+router.post('/mods/verify',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const modsPath = getModsPath();
+        const modsInDb = Mod.getAll();
+
+        const results = {
+            verified: [],      // Pliki z poprawnymi checksumami
+            corrupted: [],     // Pliki z nieprawidłowymi checksumami
+            missing: [],       // Pliki w bazie ale nie na dysku
+            orphaned: [],      // Pliki na dysku ale nie w bazie
+            errors: []         // Błędy weryfikacji
+        };
+
+        // Pobierz pliki na dysku
+        let filesOnDisk = [];
+        if (fs.existsSync(modsPath)) {
+            filesOnDisk = fs.readdirSync(modsPath)
+                .filter(f => isAllowedModFile(f));
+        }
+        const diskFilenames = new Set(filesOnDisk);
+
+        // Weryfikuj każdy mod z bazy
+        for (const mod of modsInDb) {
+            const filePath = path.join(modsPath, mod.filename);
+
+            // Tylko lokalne pliki (nie zewnętrzne URL)
+            if (mod.url && !mod.url.startsWith('/api/download/mods/')) {
+                // Pomiń zewnętrzne mody - nie możemy ich weryfikować
+                continue;
+            }
+
+            const verification = await verifyFileSHA256(filePath, mod.sha256);
+
+            if (verification.error === 'file_not_found') {
+                results.missing.push({
+                    id: mod.id,
+                    filename: mod.filename,
+                    expectedSha256: mod.sha256
+                });
+            } else if (!verification.valid) {
+                results.corrupted.push({
+                    id: mod.id,
+                    filename: mod.filename,
+                    expectedSha256: mod.sha256,
+                    actualSha256: verification.actual
+                });
+            } else {
+                results.verified.push({
+                    id: mod.id,
+                    filename: mod.filename,
+                    sha256: mod.sha256
+                });
+            }
+
+            // Usuń z listy dyskowej
+            diskFilenames.delete(mod.filename);
+        }
+
+        // Pozostałe pliki na dysku to "orphaned" (nie w bazie)
+        for (const filename of diskFilenames) {
+            const filePath = path.join(modsPath, filename);
+            try {
+                const sha256 = await calculateSHA256(filePath);
+                const stats = fs.statSync(filePath);
+                results.orphaned.push({
+                    filename,
+                    sha256,
+                    size: stats.size
+                });
+            } catch (error) {
+                results.errors.push({
+                    filename,
+                    error: error.message
+                });
+            }
+        }
+
+        // Loguj akcję
+        ActivityLog.logAdminAction('mods_verify', {
+            verified: results.verified.length,
+            corrupted: results.corrupted.length,
+            missing: results.missing.length,
+            orphaned: results.orphaned.length
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: `Weryfikacja zakończona: ${results.verified.length} OK, ${results.corrupted.length} uszkodzonych, ${results.missing.length} brakujących`,
+            data: results
+        });
+    })
+);
+
+/**
+ * POST /api/admin/mods/:id/recalculate-sha256
+ * Przelicza SHA256 dla konkretnego moda i aktualizuje w bazie
+ */
+router.post('/mods/:id/recalculate-sha256',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą całkowitą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const { id } = req.params;
+        const mod = Mod.findById(parseInt(id));
+
+        if (!mod) {
+            return res.status(404).json({
+                success: false,
+                error: 'Mod nie znaleziony'
+            });
+        }
+
+        const filePath = path.join(getModsPath(), mod.filename);
+
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({
+                success: false,
+                error: 'Plik moda nie istnieje na serwerze'
+            });
+        }
+
+        try {
+            const newSha256 = await calculateSHA256(filePath);
+            const stats = fs.statSync(filePath);
+
+            // Aktualizuj w bazie
+            Mod.update(parseInt(id), {
+                sha256: newSha256,
+                file_size: stats.size
+            });
+
+            ActivityLog.logAdminAction('mod_sha256_recalculate', {
+                modId: id,
+                filename: mod.filename,
+                oldSha256: mod.sha256,
+                newSha256
+            }, getClientIp(req));
+
+            res.json({
+                success: true,
+                message: 'SHA256 zaktualizowany',
+                data: {
+                    filename: mod.filename,
+                    oldSha256: mod.sha256,
+                    newSha256,
+                    size: stats.size
+                }
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                error: `Błąd przeliczania SHA256: ${error.message}`
+            });
+        }
+    })
+);
 
 // ============================================
 // STATYSTYKI GRACZY
