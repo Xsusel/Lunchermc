@@ -60,6 +60,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     detectJava: () => ipcRenderer.invoke('detect-java'),
     checkJava: (javaPath) => ipcRenderer.invoke('check-java', javaPath),
 
+    // ============================================
+    // AUTO-INSTALACJA JAVA
+    // ============================================
+    autoInstallJava: (version = 17) => ipcRenderer.invoke('auto-install-java', version),
+    getInstalledJava: () => ipcRenderer.invoke('get-installed-java'),
+
+    // ============================================
+    // OPTYMALIZACJE
+    // ============================================
+    testNetworkSpeed: () => ipcRenderer.invoke('test-network-speed'),
+    getOptimalRam: () => ipcRenderer.invoke('get-optimal-ram'),
+    autoConfigureRam: () => ipcRenderer.invoke('auto-configure-ram'),
+
+    // ============================================
+    // CRASH REPORTER
+    // ============================================
+    getCrashReports: () => ipcRenderer.invoke('get-crash-reports'),
+    readCrashReport: (filepath) => ipcRenderer.invoke('read-crash-report', filepath),
+    openCrashReportsFolder: () => ipcRenderer.invoke('open-crash-reports-folder'),
+
     // Synchronizacja plikow
     syncMods: (mods) => ipcRenderer.invoke('sync-mods', mods),
     getFileHash: (filePath) => ipcRenderer.invoke('get-file-hash', filePath),
@@ -70,7 +90,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('game-output', (event, data) => callback(data));
     },
     onGameClose: (callback) => {
-        ipcRenderer.on('game-close', (event, code) => callback(code));
+        ipcRenderer.on('game-close', (event, data) => callback(data));
+    },
+    onGameCrash: (callback) => {
+        ipcRenderer.on('game-crash', (event, data) => callback(data));
     },
     onDownloadProgress: (callback) => {
         ipcRenderer.on('download-progress', (event, data) => callback(data));

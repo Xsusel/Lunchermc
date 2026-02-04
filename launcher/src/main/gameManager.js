@@ -1,6 +1,13 @@
 /**
  * XsusLauncher - Manager gry
  * Obsługuje wykrywanie Java, pobieranie plików i uruchamianie Minecraft
+ *
+ * Features:
+ * - Auto-instalacja Java (Adoptium)
+ * - Wznawianie pobierania (HTTP Range)
+ * - Auto-tune concurrent downloads
+ * - Auto RAM settings
+ * - Crash reporter
  */
 const { app, ipcMain } = require('electron');
 const path = require('path');
@@ -10,6 +17,7 @@ const http = require('http');
 const { spawn, exec } = require('child_process');
 const crypto = require('crypto');
 const extractZip = require('extract-zip');
+const os = require('os');
 
 // Próba załadowania minecraft-launcher-core
 let Client;
@@ -39,6 +47,19 @@ class GameManager {
         this.javaCacheTime = 0;
         this.javaCacheDuration = 5 * 60 * 1000; // 5 minut cache
         this.cachedJavaInstallations = null;
+
+        // Auto-tune downloads
+        this.concurrentDownloads = 5; // Domyślnie 5, auto-tune może zmienić (3-10)
+        this.networkSpeedMbps = 0;
+        this.lastSpeedTest = 0;
+
+        // Crash reporter
+        this.gameStartTime = null;
+        this.gameLogs = [];
+        this.maxLogLines = 1000;
+
+        // Java auto-installer
+        this.isInstallingJava = false;
     }
 
     /**
@@ -107,6 +128,622 @@ class GameManager {
         if (!fs.existsSync(dirPath)) {
             fs.mkdirSync(dirPath, { recursive: true });
         }
+    }
+
+    // ============================================
+    // AUTO-INSTALACJA JAVA (ADOPTIUM)
+    // ============================================
+
+    /**
+     * Pobiera URL do pobrania Adoptium JDK dla danej platformy
+     */
+    getAdoptiumDownloadUrl(javaVersion = 17) {
+        const platform = process.platform;
+        const arch = process.arch === 'x64' ? 'x64' : (process.arch === 'arm64' ? 'aarch64' : 'x64');
+
+        let os_name, ext;
+        if (platform === 'win32') {
+            os_name = 'windows';
+            ext = 'zip';
+        } else if (platform === 'darwin') {
+            os_name = 'mac';
+            ext = 'tar.gz';
+        } else {
+            os_name = 'linux';
+            ext = 'tar.gz';
+        }
+
+        // Adoptium API URL
+        return `https://api.adoptium.net/v3/binary/latest/${javaVersion}/ga/${os_name}/${arch}/jdk/hotspot/normal/eclipse?project=jdk`;
+    }
+
+    /**
+     * Pobiera ścieżkę do folderu Java w launcherze
+     */
+    getJavaInstallPath() {
+        const gamePath = this.getGamePath();
+        return path.join(gamePath, 'java');
+    }
+
+    /**
+     * Sprawdza czy Java jest już zainstalowana przez launcher
+     */
+    getInstalledJavaPath() {
+        const javaDir = this.getJavaInstallPath();
+        if (!fs.existsSync(javaDir)) return null;
+
+        const javaExe = process.platform === 'win32' ? 'javaw.exe' : 'java';
+
+        try {
+            const entries = fs.readdirSync(javaDir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    // Sprawdź standardową strukturę JDK
+                    const binPath = path.join(javaDir, entry.name, 'bin', javaExe);
+                    if (fs.existsSync(binPath)) {
+                        return binPath;
+                    }
+                    // macOS ma inną strukturę
+                    const macPath = path.join(javaDir, entry.name, 'Contents', 'Home', 'bin', javaExe);
+                    if (fs.existsSync(macPath)) {
+                        return macPath;
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Error checking installed Java:', e);
+        }
+
+        return null;
+    }
+
+    /**
+     * Automatycznie instaluje Java (Adoptium) jeśli nie znaleziono
+     */
+    async autoInstallJava(requiredVersion = 17) {
+        if (this.isInstallingJava) {
+            throw new Error('Java jest już instalowana');
+        }
+
+        this.isInstallingJava = true;
+        const javaDir = this.getJavaInstallPath();
+        this.ensureDir(javaDir);
+
+        try {
+            this.sendToRenderer('game-status', { status: 'Pobieranie Java (Adoptium)...' });
+            console.log(`Auto-installing Java ${requiredVersion}...`);
+
+            // Pobierz URL
+            const downloadUrl = this.getAdoptiumDownloadUrl(requiredVersion);
+            const ext = process.platform === 'win32' ? 'zip' : 'tar.gz';
+            const archivePath = path.join(javaDir, `adoptium-${requiredVersion}.${ext}`);
+
+            // Pobierz archiwum
+            await this.downloadFileWithResume(downloadUrl, archivePath, (downloaded, total) => {
+                const percent = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+                this.sendThrottledProgress('download-progress', {
+                    type: 'java-installer',
+                    name: `Java ${requiredVersion} (Adoptium)`,
+                    current: 1,
+                    total: 1,
+                    status: 'downloading',
+                    bytes: downloaded,
+                    totalBytes: total,
+                    percent
+                });
+            });
+
+            // Rozpakuj archiwum
+            this.sendToRenderer('game-status', { status: 'Instalowanie Java...' });
+            console.log('Extracting Java archive...');
+
+            if (ext === 'zip') {
+                await extractZip(archivePath, { dir: javaDir });
+            } else {
+                // Dla tar.gz użyj tar
+                await new Promise((resolve, reject) => {
+                    exec(`tar -xzf "${archivePath}" -C "${javaDir}"`, (error) => {
+                        if (error) reject(error);
+                        else resolve();
+                    });
+                });
+            }
+
+            // Usuń archiwum
+            try { fs.unlinkSync(archivePath); } catch (e) {}
+
+            // Znajdź zainstalowaną Javę
+            const installedPath = this.getInstalledJavaPath();
+            if (!installedPath) {
+                throw new Error('Nie udało się znaleźć Java po instalacji');
+            }
+
+            // Weryfikuj instalację
+            const javaInfo = await this.getJavaVersion(installedPath);
+            if (!javaInfo) {
+                throw new Error('Zainstalowana Java nie działa poprawnie');
+            }
+
+            console.log(`Java ${javaInfo.version} installed successfully at: ${installedPath}`);
+
+            // Wyczyść cache Java
+            this.cachedJavaInstallations = null;
+            this.javaCacheTime = 0;
+
+            this.sendToRenderer('game-status', {
+                status: `Java ${javaInfo.version} zainstalowana pomyślnie!`
+            });
+
+            return installedPath;
+
+        } catch (error) {
+            console.error('Java auto-install failed:', error);
+            throw new Error(`Nie udało się zainstalować Java: ${error.message}`);
+        } finally {
+            this.isInstallingJava = false;
+        }
+    }
+
+    // ============================================
+    // WZNAWIANIE POBIERANIA (HTTP RANGE)
+    // ============================================
+
+    /**
+     * Pobiera plik z obsługą wznawiania (HTTP Range)
+     */
+    downloadFileWithResume(url, destPath, onProgress, maxRetries = 5) {
+        return new Promise((resolve, reject) => {
+            this.ensureDir(path.dirname(destPath));
+
+            const fullUrl = this.getFullUrl(url);
+            if (!fullUrl) {
+                reject(new Error('Invalid URL'));
+                return;
+            }
+
+            // Sprawdź czy istnieje częściowo pobrany plik
+            const partialPath = destPath + '.partial';
+            let startByte = 0;
+
+            if (fs.existsSync(partialPath)) {
+                const stat = fs.statSync(partialPath);
+                startByte = stat.size;
+                console.log(`Resuming download from byte ${startByte}`);
+            }
+
+            const attemptDownload = (attempt) => {
+                const protocol = fullUrl.startsWith('https') ? https : http;
+
+                const options = {
+                    headers: {}
+                };
+
+                // Dodaj Range header jeśli wznawiamy
+                if (startByte > 0) {
+                    options.headers['Range'] = `bytes=${startByte}-`;
+                }
+
+                // Otwórz plik w trybie append lub write
+                const fileFlags = startByte > 0 ? 'a' : 'w';
+                const file = fs.createWriteStream(partialPath, { flags: fileFlags });
+                let downloadedBytes = startByte;
+                let lastProgressTime = Date.now();
+                let totalSize = 0;
+
+                const cleanup = (removeFile = true) => {
+                    try {
+                        file.close();
+                        if (removeFile && fs.existsSync(partialPath)) {
+                            fs.unlinkSync(partialPath);
+                        }
+                    } catch (e) {}
+                };
+
+                const retryOrFail = (error) => {
+                    cleanup(false); // Nie usuwaj pliku - może być wznowiony
+                    if (attempt < maxRetries) {
+                        const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+                        console.log(`[RETRY ${attempt + 1}/${maxRetries}] ${path.basename(destPath)} - ${error.message}, waiting ${delay}ms`);
+                        // Zaktualizuj startByte z aktualnego rozmiaru pliku
+                        if (fs.existsSync(partialPath)) {
+                            startByte = fs.statSync(partialPath).size;
+                        }
+                        setTimeout(() => attemptDownload(attempt + 1), delay);
+                    } else {
+                        cleanup(true); // Usuń plik po ostatniej próbie
+                        reject(new Error(`Failed after ${maxRetries} attempts: ${error.message}`));
+                    }
+                };
+
+                const request = protocol.get(fullUrl, options, (response) => {
+                    // Obsługa przekierowań
+                    if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                        cleanup(false);
+                        return this.downloadFileWithResume(response.headers.location, destPath, onProgress, maxRetries - attempt)
+                            .then(resolve)
+                            .catch(reject);
+                    }
+
+                    // 206 = Partial Content (wznawianie działa)
+                    // 200 = OK (serwer nie obsługuje Range, zacznij od nowa)
+                    if (response.statusCode === 200 && startByte > 0) {
+                        console.log('Server does not support resume, starting from beginning');
+                        startByte = 0;
+                        downloadedBytes = 0;
+                        cleanup(true);
+                        return attemptDownload(attempt);
+                    }
+
+                    if (response.statusCode !== 200 && response.statusCode !== 206) {
+                        retryOrFail(new Error(`HTTP ${response.statusCode}`));
+                        return;
+                    }
+
+                    // Oblicz całkowity rozmiar
+                    if (response.statusCode === 206 && response.headers['content-range']) {
+                        const match = response.headers['content-range'].match(/bytes \d+-\d+\/(\d+)/);
+                        if (match) {
+                            totalSize = parseInt(match[1], 10);
+                        }
+                    } else {
+                        totalSize = parseInt(response.headers['content-length'] || '0', 10) + startByte;
+                    }
+
+                    response.on('data', (chunk) => {
+                        downloadedBytes += chunk.length;
+                        lastProgressTime = Date.now();
+                        if (onProgress && totalSize > 0) {
+                            onProgress(downloadedBytes, totalSize);
+                        }
+                    });
+
+                    response.pipe(file);
+
+                    file.on('finish', () => {
+                        file.close(() => {
+                            // Sprawdź czy plik ma sensowny rozmiar
+                            try {
+                                const stat = fs.statSync(partialPath);
+                                if (totalSize > 0 && stat.size < totalSize * 0.99) {
+                                    // Zapisz postęp i retry
+                                    startByte = stat.size;
+                                    retryOrFail(new Error(`Incomplete download: ${stat.size}/${totalSize} bytes`));
+                                } else {
+                                    // Zmień nazwę z .partial na docelową
+                                    if (fs.existsSync(destPath)) {
+                                        fs.unlinkSync(destPath);
+                                    }
+                                    fs.renameSync(partialPath, destPath);
+                                    resolve(destPath);
+                                }
+                            } catch (e) {
+                                // Zmień nazwę nawet jeśli nie znamy rozmiaru
+                                try {
+                                    if (fs.existsSync(destPath)) {
+                                        fs.unlinkSync(destPath);
+                                    }
+                                    fs.renameSync(partialPath, destPath);
+                                    resolve(destPath);
+                                } catch (e2) {
+                                    reject(e2);
+                                }
+                            }
+                        });
+                    });
+
+                    file.on('error', (err) => retryOrFail(err));
+                    response.on('error', (err) => retryOrFail(err));
+                });
+
+                request.on('error', (err) => retryOrFail(err));
+
+                // Timeout - 2 minuty
+                request.setTimeout(120000, () => {
+                    request.destroy();
+                    retryOrFail(new Error('Download timeout'));
+                });
+
+                // Sprawdź czy pobieranie się nie zawiesiło
+                const stallCheck = setInterval(() => {
+                    if (Date.now() - lastProgressTime > 30000 && downloadedBytes > startByte) {
+                        clearInterval(stallCheck);
+                        request.destroy();
+                        retryOrFail(new Error('Download stalled'));
+                    }
+                }, 5000);
+
+                request.on('close', () => clearInterval(stallCheck));
+            };
+
+            attemptDownload(0);
+        });
+    }
+
+    // ============================================
+    // AUTO-TUNE CONCURRENT DOWNLOADS
+    // ============================================
+
+    /**
+     * Testuje prędkość sieci i dostosowuje liczbę równoległych pobrań
+     */
+    async testNetworkSpeed() {
+        const now = Date.now();
+        // Testuj co 5 minut max
+        if (this.lastSpeedTest > 0 && (now - this.lastSpeedTest) < 5 * 60 * 1000) {
+            return this.networkSpeedMbps;
+        }
+
+        console.log('Testing network speed...');
+        this.sendToRenderer('game-status', { status: 'Testowanie prędkości sieci...' });
+
+        try {
+            // Pobierz mały plik testowy (np. z Cloudflare)
+            const testUrl = 'https://speed.cloudflare.com/__down?bytes=1000000'; // 1MB
+            const testSize = 1000000;
+            const startTime = Date.now();
+
+            await new Promise((resolve, reject) => {
+                const request = https.get(testUrl, (response) => {
+                    if (response.statusCode !== 200) {
+                        reject(new Error(`HTTP ${response.statusCode}`));
+                        return;
+                    }
+
+                    let downloaded = 0;
+                    response.on('data', (chunk) => {
+                        downloaded += chunk.length;
+                    });
+                    response.on('end', () => resolve(downloaded));
+                    response.on('error', reject);
+                });
+                request.on('error', reject);
+                request.setTimeout(10000, () => {
+                    request.destroy();
+                    reject(new Error('Speed test timeout'));
+                });
+            });
+
+            const elapsed = (Date.now() - startTime) / 1000; // sekundy
+            const speedMbps = (testSize * 8) / (elapsed * 1000000); // Mbps
+
+            this.networkSpeedMbps = speedMbps;
+            this.lastSpeedTest = now;
+
+            // Dostosuj liczbę równoległych pobrań
+            // < 10 Mbps: 3 równoległe
+            // 10-50 Mbps: 5 równoległych
+            // 50-100 Mbps: 7 równoległych
+            // > 100 Mbps: 10 równoległych
+            if (speedMbps < 10) {
+                this.concurrentDownloads = 3;
+            } else if (speedMbps < 50) {
+                this.concurrentDownloads = 5;
+            } else if (speedMbps < 100) {
+                this.concurrentDownloads = 7;
+            } else {
+                this.concurrentDownloads = 10;
+            }
+
+            console.log(`Network speed: ${speedMbps.toFixed(2)} Mbps, concurrent downloads: ${this.concurrentDownloads}`);
+
+            return speedMbps;
+
+        } catch (error) {
+            console.warn('Speed test failed, using default settings:', error.message);
+            this.concurrentDownloads = 5;
+            return 0;
+        }
+    }
+
+    // ============================================
+    // AUTO RAM SETTINGS
+    // ============================================
+
+    /**
+     * Oblicza optymalne ustawienia RAM na podstawie systemu
+     */
+    getOptimalRamSettings() {
+        const totalMemGB = Math.round(os.totalmem() / (1024 * 1024 * 1024));
+        const freeMemGB = Math.round(os.freemem() / (1024 * 1024 * 1024));
+
+        console.log(`System RAM: ${totalMemGB} GB total, ${freeMemGB} GB free`);
+
+        // Zostaw minimum 2GB dla systemu
+        const availableForGame = Math.max(totalMemGB - 2, 2);
+
+        // Ustawienia w zależności od dostępnej pamięci
+        let minRam, maxRam;
+
+        if (totalMemGB <= 4) {
+            // Mało RAM - oszczędne ustawienia
+            minRam = 1;
+            maxRam = 2;
+        } else if (totalMemGB <= 8) {
+            // Średnio RAM
+            minRam = 2;
+            maxRam = Math.min(4, availableForGame);
+        } else if (totalMemGB <= 16) {
+            // Dużo RAM
+            minRam = 2;
+            maxRam = Math.min(8, availableForGame);
+        } else {
+            // Bardzo dużo RAM
+            minRam = 4;
+            maxRam = Math.min(12, availableForGame);
+        }
+
+        return {
+            min: minRam,
+            max: maxRam,
+            totalSystem: totalMemGB,
+            freeSystem: freeMemGB,
+            recommended: maxRam
+        };
+    }
+
+    /**
+     * Automatycznie ustawia RAM jeśli użytkownik nie zmienił ustawień
+     */
+    async autoConfigureRam() {
+        // Sprawdź czy użytkownik ręcznie ustawił RAM
+        const userConfigured = this.store.get('ramManuallyConfigured');
+        if (userConfigured) {
+            console.log('RAM settings manually configured, skipping auto-config');
+            return this.store.get('ram') || { min: 2, max: 4 };
+        }
+
+        const optimal = this.getOptimalRamSettings();
+        console.log(`Auto-configuring RAM: min=${optimal.min}GB, max=${optimal.max}GB`);
+
+        this.store.set('ram', { min: optimal.min, max: optimal.max });
+
+        return { min: optimal.min, max: optimal.max };
+    }
+
+    // ============================================
+    // CRASH REPORTER
+    // ============================================
+
+    /**
+     * Zapisuje linię logu z gry
+     */
+    addGameLog(line) {
+        this.gameLogs.push({
+            time: new Date().toISOString(),
+            line: line
+        });
+
+        // Ogranicz liczbę linii
+        if (this.gameLogs.length > this.maxLogLines) {
+            this.gameLogs.shift();
+        }
+    }
+
+    /**
+     * Wykrywa crash na podstawie logów
+     */
+    detectCrash(exitCode, logs) {
+        // Exit code != 0 sugeruje crash
+        if (exitCode !== 0 && exitCode !== null) {
+            return {
+                detected: true,
+                type: 'exit_code',
+                code: exitCode
+            };
+        }
+
+        // Sprawdź logi pod kątem typowych błędów
+        const crashPatterns = [
+            /Exception in thread/i,
+            /Error: Could not create the Java Virtual Machine/i,
+            /OutOfMemoryError/i,
+            /A fatal error has been detected/i,
+            /EXCEPTION_ACCESS_VIOLATION/i,
+            /Minecraft has crashed/i,
+            /The game crashed whilst/i
+        ];
+
+        const lastLogs = logs.slice(-100); // Sprawdź ostatnie 100 linii
+        for (const log of lastLogs) {
+            for (const pattern of crashPatterns) {
+                if (pattern.test(log.line)) {
+                    return {
+                        detected: true,
+                        type: 'log_pattern',
+                        pattern: pattern.toString(),
+                        line: log.line
+                    };
+                }
+            }
+        }
+
+        return { detected: false };
+    }
+
+    /**
+     * Generuje raport o crashu
+     */
+    generateCrashReport(crashInfo, config) {
+        const report = {
+            timestamp: new Date().toISOString(),
+            launcherVersion: app.getVersion(),
+            platform: process.platform,
+            arch: process.arch,
+            nodeVersion: process.version,
+
+            system: {
+                totalMemory: os.totalmem(),
+                freeMemory: os.freemem(),
+                cpus: os.cpus().length,
+                osRelease: os.release()
+            },
+
+            game: {
+                version: config?.gameVersion || 'unknown',
+                loader: config?.loaderType || 'vanilla',
+                forgeVersion: config?.forgeVersion,
+                serverIp: config?.serverIp,
+                username: config?.username
+            },
+
+            settings: {
+                ram: this.store.get('ram'),
+                javaPath: this.store.get('javaPath'),
+                resolution: this.store.get('resolution')
+            },
+
+            crash: crashInfo,
+
+            // Ostatnie 200 linii logów
+            logs: this.gameLogs.slice(-200),
+
+            sessionDuration: this.gameStartTime ?
+                Math.round((Date.now() - this.gameStartTime) / 1000) : 0
+        };
+
+        return report;
+    }
+
+    /**
+     * Zapisuje raport o crashu do pliku
+     */
+    async saveCrashReport(report) {
+        const gamePath = this.getGamePath();
+        const crashDir = path.join(gamePath, 'crash-reports', 'launcher');
+        this.ensureDir(crashDir);
+
+        const filename = `crash-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+        const filepath = path.join(crashDir, filename);
+
+        fs.writeFileSync(filepath, JSON.stringify(report, null, 2));
+        console.log(`Crash report saved to: ${filepath}`);
+
+        return filepath;
+    }
+
+    /**
+     * Obsługuje zamknięcie gry (wykrywa crash)
+     */
+    async handleGameClose(exitCode, config) {
+        const crashInfo = this.detectCrash(exitCode, this.gameLogs);
+
+        if (crashInfo.detected) {
+            console.log('Crash detected:', crashInfo);
+
+            const report = this.generateCrashReport(crashInfo, config);
+            const reportPath = await this.saveCrashReport(report);
+
+            // Powiadom renderer o crashu
+            this.sendToRenderer('game-crash', {
+                crash: crashInfo,
+                reportPath,
+                sessionDuration: report.sessionDuration
+            });
+
+            return { crashed: true, report, reportPath };
+        }
+
+        return { crashed: false };
     }
 
     // ============================================
@@ -580,10 +1217,11 @@ class GameManager {
     }
 
     /**
-     * Pobiera pojedynczy plik z weryfikacją
+     * Pobiera pojedynczy plik z weryfikacją (ze wsparciem wznawiania)
      */
     async downloadAndVerifyFile(file, destPath, onProgress) {
-        await this.downloadFile(file.url, destPath, onProgress);
+        // Użyj wznawiania pobierania dla lepszego UX
+        await this.downloadFileWithResume(file.url, destPath, onProgress);
 
         // Weryfikuj hash po pobraniu
         if (file.sha256) {
@@ -601,7 +1239,8 @@ class GameManager {
      * Synchronizuje pliki z serwerem - RÓWNOLEGŁE POBIERANIE z optymalizacjami
      */
     async syncFiles(files, gamePath) {
-        const CONCURRENT_DOWNLOADS = 5; // Liczba równoległych pobrań
+        // Użyj dynamicznej liczby pobrań (auto-tuned)
+        const CONCURRENT_DOWNLOADS = this.concurrentDownloads || 5;
         const CONCURRENT_VERIFICATIONS = 10; // Liczba równoległych weryfikacji (optymalizacja)
         const MAX_RETRIES_PER_FILE = 3;
 
@@ -791,22 +1430,67 @@ class GameManager {
         }
 
         this.isLaunching = true;
+        this.gameLogs = []; // Reset logów
+        this.gameStartTime = Date.now();
+
+        // Przechowaj config dla crash reportera
+        this.currentGameConfig = config;
 
         try {
             const gamePath = this.getGamePath();
             this.ensureDir(gamePath);
+
+            // Auto-tune downloads na podstawie prędkości sieci
+            this.sendToRenderer('game-status', { status: 'Optymalizacja połączenia...' });
+            await this.testNetworkSpeed();
+
+            // Auto-konfiguracja RAM
+            this.sendToRenderer('game-status', { status: 'Konfiguracja pamięci...' });
+            await this.autoConfigureRam();
 
             // Sprawdź Java
             this.sendToRenderer('game-status', { status: 'Wykrywanie Java...' });
 
             let javaPath = this.store.get('javaPath');
             if (!javaPath) {
-                const bestJava = await this.getBestJavaForVersion(config.gameVersion);
-                if (!bestJava) {
-                    throw new Error('Nie znaleziono Java. Zainstaluj Java 17+ lub wskaż ścieżkę w ustawieniach.');
+                // Najpierw sprawdź czy mamy zainstalowaną przez launcher
+                const installedJava = this.getInstalledJavaPath();
+                if (installedJava) {
+                    const javaInfo = await this.getJavaVersion(installedJava);
+                    if (javaInfo) {
+                        javaPath = installedJava;
+                        console.log(`Using launcher-installed Java ${javaInfo.version}`);
+                    }
                 }
-                javaPath = bestJava.path;
-                console.log(`Using Java ${bestJava.version} from ${javaPath}`);
+
+                // Jeśli nie, szukaj w systemie
+                if (!javaPath) {
+                    const bestJava = await this.getBestJavaForVersion(config.gameVersion);
+                    if (bestJava) {
+                        javaPath = bestJava.path;
+                        console.log(`Using Java ${bestJava.version} from ${javaPath}`);
+                    }
+                }
+
+                // Jeśli nadal brak - auto-instaluj
+                if (!javaPath) {
+                    console.log('No Java found, auto-installing...');
+
+                    // Określ wymaganą wersję Java na podstawie wersji MC
+                    const [major, minor] = config.gameVersion.split('.').map(Number);
+                    let requiredJava = 17;
+                    if (major >= 1 && minor >= 20 && config.gameVersion.includes('.5')) {
+                        requiredJava = 21;
+                    } else if (major >= 1 && minor >= 18) {
+                        requiredJava = 17;
+                    }
+
+                    try {
+                        javaPath = await this.autoInstallJava(requiredJava);
+                    } catch (installError) {
+                        throw new Error(`Nie znaleziono Java i nie udało się jej zainstalować: ${installError.message}`);
+                    }
+                }
             }
 
             // Weryfikuj ścieżkę Java
@@ -974,6 +1658,7 @@ class GameManager {
 
                 launcher.on('data', (e) => {
                     console.log('[MC Data]', e);
+                    this.addGameLog(e); // Zbieraj logi dla crash reportera
                     this.sendToRenderer('game-output', e);
                 });
 
@@ -1017,8 +1702,36 @@ class GameManager {
                 this.gameProcess = await launcher.launch(launchOpts);
 
                 if (this.gameProcess) {
-                    this.gameProcess.on('close', (code) => {
-                        this.sendToRenderer('game-close', code);
+                    // Zbieraj logi z stdout/stderr
+                    if (this.gameProcess.stdout) {
+                        this.gameProcess.stdout.on('data', (data) => {
+                            const line = data.toString();
+                            this.addGameLog(line);
+                        });
+                    }
+                    if (this.gameProcess.stderr) {
+                        this.gameProcess.stderr.on('data', (data) => {
+                            const line = data.toString();
+                            this.addGameLog(line);
+                        });
+                    }
+
+                    this.gameProcess.on('close', async (code) => {
+                        console.log(`Game process closed with code: ${code}`);
+
+                        // Sprawdź czy to crash
+                        const crashResult = await this.handleGameClose(code, this.currentGameConfig);
+
+                        if (crashResult.crashed) {
+                            console.log('Game crashed, report saved');
+                        }
+
+                        this.sendToRenderer('game-close', {
+                            code,
+                            crashed: crashResult.crashed,
+                            crashReport: crashResult.reportPath
+                        });
+
                         this.gameProcess = null;
                         this.isLaunching = false;
                     });
@@ -1088,6 +1801,26 @@ class GameManager {
             return this.getJavaVersion(javaPath);
         });
 
+        // Auto-instalacja Java
+        ipcMain.handle('auto-install-java', async (event, version = 17) => {
+            try {
+                const javaPath = await this.autoInstallJava(version);
+                return { success: true, javaPath };
+            } catch (error) {
+                return { success: false, error: error.message };
+            }
+        });
+
+        // Sprawdź zainstalowaną przez launcher Javę
+        ipcMain.handle('get-installed-java', async () => {
+            const javaPath = this.getInstalledJavaPath();
+            if (javaPath) {
+                const info = await this.getJavaVersion(javaPath);
+                return { installed: true, path: javaPath, info };
+            }
+            return { installed: false };
+        });
+
         // Uruchomienie gry
         ipcMain.handle('launch-game', async (event, config) => {
             try {
@@ -1119,6 +1852,100 @@ class GameManager {
         // Sprawdź czy plik istnieje
         ipcMain.handle('file-exists', async (event, filePath) => {
             return fs.existsSync(filePath);
+        });
+
+        // ============================================
+        // NOWE HANDLERY - Optymalizacje
+        // ============================================
+
+        // Test prędkości sieci
+        ipcMain.handle('test-network-speed', async () => {
+            const speed = await this.testNetworkSpeed();
+            return {
+                speedMbps: speed,
+                concurrentDownloads: this.concurrentDownloads
+            };
+        });
+
+        // Pobierz optymalne ustawienia RAM
+        ipcMain.handle('get-optimal-ram', async () => {
+            return this.getOptimalRamSettings();
+        });
+
+        // Auto-konfiguracja RAM
+        ipcMain.handle('auto-configure-ram', async () => {
+            return this.autoConfigureRam();
+        });
+
+        // Pobierz informacje o systemie
+        ipcMain.handle('get-system-info', async () => {
+            return {
+                platform: process.platform,
+                arch: process.arch,
+                totalMemory: os.totalmem(),
+                freeMemory: os.freemem(),
+                cpus: os.cpus().length,
+                osRelease: os.release(),
+                hostname: os.hostname()
+            };
+        });
+
+        // Pobierz ostatnie raporty o crashach
+        ipcMain.handle('get-crash-reports', async () => {
+            const gamePath = this.getGamePath();
+            const crashDir = path.join(gamePath, 'crash-reports', 'launcher');
+
+            if (!fs.existsSync(crashDir)) {
+                return [];
+            }
+
+            try {
+                const files = fs.readdirSync(crashDir)
+                    .filter(f => f.endsWith('.json'))
+                    .sort()
+                    .reverse()
+                    .slice(0, 10); // Ostatnie 10
+
+                return files.map(filename => {
+                    const filepath = path.join(crashDir, filename);
+                    try {
+                        const content = fs.readFileSync(filepath, 'utf8');
+                        const report = JSON.parse(content);
+                        return {
+                            filename,
+                            filepath,
+                            timestamp: report.timestamp,
+                            crashType: report.crash?.type,
+                            gameVersion: report.game?.version
+                        };
+                    } catch (e) {
+                        return { filename, filepath, error: 'Failed to parse' };
+                    }
+                });
+            } catch (e) {
+                return [];
+            }
+        });
+
+        // Odczytaj konkretny raport o crashu
+        ipcMain.handle('read-crash-report', async (event, filepath) => {
+            try {
+                const content = fs.readFileSync(filepath, 'utf8');
+                return JSON.parse(content);
+            } catch (e) {
+                return null;
+            }
+        });
+
+        // Otwórz folder z crash reportami
+        ipcMain.handle('open-crash-reports-folder', async () => {
+            const gamePath = this.getGamePath();
+            const crashDir = path.join(gamePath, 'crash-reports', 'launcher');
+            this.ensureDir(crashDir);
+
+            const { shell } = require('electron');
+            shell.openPath(crashDir);
+            return crashDir;
         });
     }
 }
