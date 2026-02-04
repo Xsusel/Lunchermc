@@ -94,6 +94,13 @@ const elements = {
     registerModalClose: document.getElementById('register-modal-close'),
     linkLogin: document.getElementById('link-login'),
 
+    // Changelog modal
+    changelogModal: document.getElementById('changelog-modal'),
+    changelogModalClose: document.getElementById('changelog-modal-close'),
+    changelogVersion: document.getElementById('changelog-version'),
+    changelogContent: document.getElementById('changelog-content'),
+    btnChangelogClose: document.getElementById('btn-changelog-close'),
+
     // Toast
     toastContainer: document.getElementById('toast-container')
 };
@@ -127,6 +134,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Inicjalizuj przycisk graj
     initPlayButton();
+
+    // Sprawdź czy pokazać changelog (nowa wersja)
+    await checkChangelog();
 
     console.log('XsusLauncher gotowy!');
 });
@@ -214,27 +224,45 @@ function initModals() {
         if (e.target === elements.registerModal) closeModal('register');
     });
 
+    // Changelog modal
+    elements.changelogModalClose?.addEventListener('click', () => closeModal('changelog'));
+    elements.btnChangelogClose?.addEventListener('click', () => closeModal('changelog'));
+    elements.changelogModal?.addEventListener('click', (e) => {
+        if (e.target === elements.changelogModal) closeModal('changelog');
+    });
+
     // Formularze
     elements.loginForm?.addEventListener('submit', handleLogin);
     elements.registerForm?.addEventListener('submit', handleRegister);
 }
 
 function openModal(name) {
-    const modal = name === 'login' ? elements.loginModal : elements.registerModal;
+    let modal;
+    if (name === 'login') modal = elements.loginModal;
+    else if (name === 'register') modal = elements.registerModal;
+    else if (name === 'changelog') modal = elements.changelogModal;
+
     modal?.classList.add('active');
 }
 
 function closeModal(name) {
-    const modal = name === 'login' ? elements.loginModal : elements.registerModal;
+    let modal;
+    if (name === 'login') modal = elements.loginModal;
+    else if (name === 'register') modal = elements.registerModal;
+    else if (name === 'changelog') modal = elements.changelogModal;
+
     modal?.classList.remove('active');
 
     // Wyczyść błędy
     if (name === 'login') {
         elements.loginError.classList.remove('active');
         elements.loginError.textContent = '';
-    } else {
+    } else if (name === 'register') {
         elements.registerError.classList.remove('active');
         elements.registerError.textContent = '';
+    } else if (name === 'changelog') {
+        // Oznacz changelog jako widziany przy zamknięciu
+        window.electronAPI?.markChangelogSeen();
     }
 }
 
@@ -829,6 +857,91 @@ async function loadLauncherVersion() {
     } catch {
         elements.launcherVersion.textContent = '1.0.0';
     }
+}
+
+// ============================================
+// CHANGELOG
+// ============================================
+async function checkChangelog() {
+    try {
+        const result = await window.electronAPI?.shouldShowChangelog();
+        if (result?.show && result?.changelog) {
+            showChangelog(result.version, result.changelog);
+        }
+    } catch (error) {
+        console.warn('Failed to check changelog:', error);
+    }
+}
+
+function showChangelog(version, changelog) {
+    // Ustaw wersję
+    if (elements.changelogVersion) {
+        elements.changelogVersion.textContent = version;
+    }
+
+    // Buduj zawartość
+    if (elements.changelogContent && changelog) {
+        let html = '';
+
+        // Sekcja "Nowe"
+        if (changelog.sections?.new?.length > 0) {
+            html += `
+                <div class="changelog-section">
+                    <h4 class="changelog-section-title new">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Nowe funkcje
+                    </h4>
+                    <ul class="changelog-list">
+                        ${changelog.sections.new.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        // Sekcja "Ulepszenia"
+        if (changelog.sections?.improved?.length > 0) {
+            html += `
+                <div class="changelog-section">
+                    <h4 class="changelog-section-title improved">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+                            <polyline points="17 6 23 6 23 12"/>
+                        </svg>
+                        Ulepszenia
+                    </h4>
+                    <ul class="changelog-list">
+                        ${changelog.sections.improved.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        // Sekcja "Naprawione"
+        if (changelog.sections?.fixed?.length > 0) {
+            html += `
+                <div class="changelog-section">
+                    <h4 class="changelog-section-title fixed">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                            <polyline points="22 4 12 14.01 9 11.01"/>
+                        </svg>
+                        Naprawione błędy
+                    </h4>
+                    <ul class="changelog-list">
+                        ${changelog.sections.fixed.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        elements.changelogContent.innerHTML = html;
+    }
+
+    // Otwórz modal
+    openModal('changelog');
 }
 
 // ============================================
