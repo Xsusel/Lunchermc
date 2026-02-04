@@ -17,6 +17,7 @@ import versionsRoutes from './routes/versions.js';
 import filesRoutes from './routes/files.js';
 import { apiLimiter, errorHandler, notFoundHandler } from './middleware/index.js';
 import { ensureDir, getUploadsPath, getModsPath } from './utils/helpers.js';
+import { startAutoBackup, stopAutoBackup } from './utils/backup.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -219,6 +220,9 @@ server.listen(PORT, () => {
     console.log(`   • WebSocket:   ws://localhost:${PORT}/ws`);
     console.log('═══════════════════════════════════════════════════════════');
     console.log('');
+
+    // Uruchom automatyczne backupy bazy danych
+    startAutoBackup();
 });
 
 // ============================================
@@ -227,6 +231,9 @@ server.listen(PORT, () => {
 
 const shutdown = () => {
     console.log('\n🛑 Zatrzymywanie serwera...');
+
+    // Zatrzymaj automatyczne backupy
+    stopAutoBackup();
 
     // Zamykamy połączenia WebSocket
     clients.forEach((client) => {
