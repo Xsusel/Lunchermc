@@ -18,6 +18,7 @@ import { apiLimiter, errorHandler, notFoundHandler } from './middleware/index.js
 import { ensureDir, getUploadsPath, getModsPath } from './utils/helpers.js';
 import { startAutoBackup, stopAutoBackup } from './utils/backup.js';
 import wsManager from './utils/wsManager.js';
+import { ScheduledMaintenance } from './models/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -302,7 +303,71 @@ server.listen(PORT, () => {
 
     // Uruchom automatyczne backupy bazy danych
     startAutoBackup();
+
+    // Uruchom scheduler dla scheduled maintenance
+    startMaintenanceScheduler();
 });
+
+// ============================================
+// SCHEDULER DLA SCHEDULED MAINTENANCE
+// ============================================
+
+let maintenanceSchedulerInterval = null;
+
+/**
+ * Uruchamia scheduler sprawdzający zaplanowane maintenance
+ */
+function startMaintenanceScheduler() {
+    if (maintenanceSchedulerInterval) {
+        return;
+    }
+
+    // Sprawdzaj co minutę
+    maintenanceSchedulerInterval = setInterval(() => {
+        try {
+            const result = ScheduledMaintenance.checkAndApplyMaintenance();
+
+            if (result.action === 'enabled') {
+                // Powiadom klientów WebSocket o włączeniu maintenance
+                wsManager.notifyMaintenance(true, result.maintenance.message || result.maintenance.title);
+            } else if (result.action === 'disabled') {
+                // Powiadom klientów WebSocket o wyłączeniu maintenance
+                wsManager.notifyMaintenance(false, '');
+            }
+
+            // Sprawdź nadchodzące maintenance i wyślij powiadomienia
+            const approaching = ScheduledMaintenance.getApproachingMaintenance(5); // w ciągu 5 minut
+            for (const maint of approaching) {
+                const startTime = new Date(maint.start_time);
+                const now = new Date();
+                const minutesLeft = Math.ceil((startTime - now) / (1000 * 60));
+
+                if (minutesLeft > 0 && minutesLeft <= 5) {
+                    wsManager.sendAnnouncement(
+                        '⚠️ Przerwa techniczna',
+                        `Za ${minutesLeft} minut${minutesLeft === 1 ? 'ę' : minutesLeft < 5 ? 'y' : ''} rozpocznie się przerwa techniczna: ${maint.title}`,
+                        'warning'
+                    );
+                }
+            }
+        } catch (error) {
+            console.error('[MaintenanceScheduler] Błąd:', error);
+        }
+    }, 60 * 1000); // Co minutę
+
+    console.log('[MaintenanceScheduler] Scheduler uruchomiony');
+}
+
+/**
+ * Zatrzymuje scheduler maintenance
+ */
+function stopMaintenanceScheduler() {
+    if (maintenanceSchedulerInterval) {
+        clearInterval(maintenanceSchedulerInterval);
+        maintenanceSchedulerInterval = null;
+        console.log('[MaintenanceScheduler] Scheduler zatrzymany');
+    }
+}
 
 // ============================================
 // GRACEFUL SHUTDOWN
@@ -313,6 +378,9 @@ const shutdown = () => {
 
     // Zatrzymaj automatyczne backupy
     stopAutoBackup();
+
+    // Zatrzymaj scheduler maintenance
+    stopMaintenanceScheduler();
 
     // Zamykamy połączenia WebSocket
     wsManager.closeAll();
