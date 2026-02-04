@@ -73,12 +73,28 @@ class GameLauncher {
             }
         });
 
-        // Zamkniecie gry
-        window.electronAPI.onGameClose((code) => {
-            console.log('Game closed with code:', code);
+        // Zamkniecie gry (obsługuje nowy format z crash info)
+        window.electronAPI.onGameClose((data) => {
+            // Obsługa nowego formatu (obiekt) i starego (kod)
+            const code = typeof data === 'object' ? data.code : data;
+            const crashed = typeof data === 'object' ? data.crashed : false;
+            const crashReport = typeof data === 'object' ? data.crashReport : null;
+
+            console.log('Game closed with code:', code, 'crashed:', crashed);
             this.isLaunching = false;
+
             if (this.onGameCloseCallback) {
-                this.onGameCloseCallback(code);
+                this.onGameCloseCallback({ code, crashed, crashReport });
+            }
+        });
+
+        // Crash gry (szczegółowe informacje)
+        window.electronAPI.onGameCrash?.((data) => {
+            console.log('Game crashed:', data);
+            this.isLaunching = false;
+
+            if (this.onGameCrashCallback) {
+                this.onGameCrashCallback(data);
             }
         });
 
@@ -88,6 +104,13 @@ class GameLauncher {
                 this.onStatusCallback(data.status);
             }
         });
+    }
+
+    /**
+     * Ustawia callback dla crashu gry
+     */
+    setGameCrashCallback(callback) {
+        this.onGameCrashCallback = callback;
     }
 
     /**
@@ -197,6 +220,7 @@ class GameLauncher {
                 fabricVersion: gameConfig.fabricVersion,
                 serverIp: gameConfig.serverIp,
                 serverPort: gameConfig.serverPort || 25565,
+                serverName: gameConfig.serverName || 'XsusServer', // Nazwa serwera dla moda menu
                 // Przekaż pełną listę plików do synchronizacji
                 files: files.length > 0 ? files : mods,
                 mods: mods // zachowaj dla kompatybilności

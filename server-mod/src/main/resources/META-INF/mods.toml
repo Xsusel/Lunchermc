@@ -1,0 +1,28 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="All Rights Reserved - XsusServer"
+
+[[mods]]
+modId="xsusmenu"
+version="1.0.0"
+displayName="XsusMenu - Custom Menu"
+description='''
+Modyfikuje menu główne Minecraft dla serwera XsusServer.
+Usuwa przyciski Singleplayer/Multiplayer i dodaje przycisk "Połącz z serwerem".
+'''
+authors="XsusServer Team"
+displayURL="https://xsus.pl"
+
+[[dependencies.xsusmenu]]
+modId="forge"
+mandatory=true
+versionRange="[47.0.0,)"
+ordering="NONE"
+side="CLIENT"
+
+[[dependencies.xsusmenu]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+ordering="NONE"
+side="CLIENT"
