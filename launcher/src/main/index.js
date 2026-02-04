@@ -134,6 +134,22 @@ ipcMain.handle('store-get', (event, key) => store.get(key));
 ipcMain.handle('store-set', (event, key, value) => store.set(key, value));
 ipcMain.handle('store-delete', (event, key) => store.delete(key));
 
+// Batch store operations (optymalizacja - mniej IPC calls)
+ipcMain.handle('store-get-multiple', (event, keys) => {
+    const result = {};
+    for (const key of keys) {
+        result[key] = store.get(key);
+    }
+    return result;
+});
+
+ipcMain.handle('store-set-multiple', (event, data) => {
+    for (const [key, value] of Object.entries(data)) {
+        store.set(key, value);
+    }
+    return true;
+});
+
 // Ścieżki
 ipcMain.handle('get-game-path', () => {
     const customPath = store.get('gamePath');

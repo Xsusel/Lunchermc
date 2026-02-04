@@ -197,6 +197,7 @@ class GameLauncher {
                 fabricVersion: gameConfig.fabricVersion,
                 serverIp: gameConfig.serverIp,
                 serverPort: gameConfig.serverPort || 25565,
+                serverName: gameConfig.serverName || 'XsusServer', // Nazwa serwera dla moda menu
                 // Przekaż pełną listę plików do synchronizacji
                 files: files.length > 0 ? files : mods,
                 mods: mods // zachowaj dla kompatybilności

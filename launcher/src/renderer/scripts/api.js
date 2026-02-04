@@ -8,11 +8,18 @@ const API_URL = 'https://mc.xsus.pl/api';
 
 /**
  * Klasa obsługująca komunikację z API
+ * Z optymalizacjami: cache, ETag support
  */
 class ApiClient {
     constructor() {
         this.baseUrl = API_URL;
         this.token = null;
+
+        // Cache responses (optymalizacja dla słabszych PC)
+        this.cache = new Map();
+        this.cacheExpiry = new Map();
+        this.defaultCacheTTL = 30 * 1000; // 30 sekund domyślnie
+        this.configCacheTTL = 5 * 60 * 1000; // 5 minut dla konfiguracji
     }
 
     /**
@@ -23,9 +30,57 @@ class ApiClient {
     }
 
     /**
-     * Wykonuje żądanie HTTP
+     * Sprawdza czy cache jest aktualny
      */
-    async request(endpoint, options = {}) {
+    isCacheValid(key) {
+        const expiry = this.cacheExpiry.get(key);
+        return expiry && Date.now() < expiry;
+    }
+
+    /**
+     * Pobiera z cache
+     */
+    getFromCache(key) {
+        if (this.isCacheValid(key)) {
+            return this.cache.get(key);
+        }
+        this.cache.delete(key);
+        this.cacheExpiry.delete(key);
+        return null;
+    }
+
+    /**
+     * Zapisuje do cache
+     */
+    setCache(key, data, ttl = this.defaultCacheTTL) {
+        this.cache.set(key, data);
+        this.cacheExpiry.set(key, Date.now() + ttl);
+    }
+
+    /**
+     * Czyści cały cache
+     */
+    clearCache() {
+        this.cache.clear();
+        this.cacheExpiry.clear();
+    }
+
+    /**
+     * Wykonuje żądanie HTTP z opcjonalnym cache
+     */
+    async request(endpoint, options = {}, cacheOptions = {}) {
+        const { useCache = false, cacheTTL = this.defaultCacheTTL, forceRefresh = false } = cacheOptions;
+        const cacheKey = `${endpoint}:${JSON.stringify(options.body || '')}`;
+
+        // Sprawdź cache (tylko dla GET requests)
+        if (useCache && !forceRefresh && options.method !== 'POST') {
+            const cached = this.getFromCache(cacheKey);
+            if (cached) {
+                console.log(`[API Cache HIT] ${endpoint}`);
+                return cached;
+            }
+        }
+
         const url = `${this.baseUrl}${endpoint}`;
 
         const headers = {
@@ -47,6 +102,11 @@ class ApiClient {
 
             if (!response.ok) {
                 throw new Error(data.error || 'Wystąpił błąd');
+            }
+
+            // Zapisz do cache jeśli włączony
+            if (useCache && options.method !== 'POST') {
+                this.setCache(cacheKey, data, cacheTTL);
             }
 
             return data;
@@ -108,10 +168,14 @@ class ApiClient {
     // ============================================
 
     /**
-     * Pobiera pełną konfigurację dla launchera
+     * Pobiera pełną konfigurację dla launchera (z cache)
      */
-    async getLauncherConfig() {
-        return this.request('/launcher/config');
+    async getLauncherConfig(forceRefresh = false) {
+        return this.request('/launcher/config', {}, {
+            useCache: true,
+            cacheTTL: this.configCacheTTL,
+            forceRefresh
+        });
     }
 
     /**
@@ -162,10 +226,14 @@ class ApiClient {
     }
 
     /**
-     * Sprawdza status serwera
+     * Sprawdza status serwera (z cache 15s)
      */
-    async getServerStatus() {
-        return this.request('/launcher/server-status');
+    async getServerStatus(forceRefresh = false) {
+        return this.request('/launcher/server-status', {}, {
+            useCache: true,
+            cacheTTL: 15 * 1000, // 15 sekund cache dla statusu
+            forceRefresh
+        });
     }
 }
 

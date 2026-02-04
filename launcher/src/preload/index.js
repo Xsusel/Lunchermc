@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getStore: (key) => ipcRenderer.invoke('store-get', key),
     setStore: (key, value) => ipcRenderer.invoke('store-set', key, value),
     deleteStore: (key) => ipcRenderer.invoke('store-delete', key),
+    // Batch operations (optymalizacja - pojedynczy IPC call zamiast wielu)
+    getStoreMultiple: (keys) => ipcRenderer.invoke('store-get-multiple', keys),
+    setStoreMultiple: (data) => ipcRenderer.invoke('store-set-multiple', data),
 
     // ============================================
     // ŚCIEŻKI

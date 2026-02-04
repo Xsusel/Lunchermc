@@ -29,6 +29,16 @@ class GameManager {
         this.gameProcess = null;
         this.downloadQueue = [];
         this.currentDownload = null;
+
+        // Throttling dla progress events (optymalizacja dla słabszych PC)
+        this.lastProgressUpdate = 0;
+        this.progressThrottleMs = 100; // Minimum 100ms między aktualizacjami
+        this.pendingProgress = null;
+
+        // Cache dla wykrywania Java
+        this.javaCacheTime = 0;
+        this.javaCacheDuration = 5 * 60 * 1000; // 5 minut cache
+        this.cachedJavaInstallations = null;
     }
 
     /**
@@ -37,6 +47,38 @@ class GameManager {
     sendToRenderer(channel, data) {
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.webContents.send(channel, data);
+        }
+    }
+
+    /**
+     * Wysyła throttled progress update (optymalizacja dla słabszych PC)
+     * Ogranicza liczbę aktualizacji do max 10/sekundę
+     */
+    sendThrottledProgress(channel, data) {
+        const now = Date.now();
+        const elapsed = now - this.lastProgressUpdate;
+
+        // Zawsze zapisz najnowsze dane
+        this.pendingProgress = { channel, data };
+
+        // Jeśli minęło wystarczająco czasu, wyślij od razu
+        if (elapsed >= this.progressThrottleMs) {
+            this.lastProgressUpdate = now;
+            this.sendToRenderer(channel, data);
+            this.pendingProgress = null;
+            return;
+        }
+
+        // Jeśli nie ma zaplanowanego wysłania, zaplanuj je
+        if (!this.progressTimeout) {
+            this.progressTimeout = setTimeout(() => {
+                if (this.pendingProgress) {
+                    this.lastProgressUpdate = Date.now();
+                    this.sendToRenderer(this.pendingProgress.channel, this.pendingProgress.data);
+                    this.pendingProgress = null;
+                }
+                this.progressTimeout = null;
+            }, this.progressThrottleMs - elapsed);
         }
     }
 
@@ -189,9 +231,17 @@ class GameManager {
     }
 
     /**
-     * Wykrywa wszystkie zainstalowane wersje Java
+     * Wykrywa wszystkie zainstalowane wersje Java (z cache)
      */
-    async detectJava() {
+    async detectJava(forceRefresh = false) {
+        // Sprawdź cache
+        const now = Date.now();
+        if (!forceRefresh && this.cachedJavaInstallations && (now - this.javaCacheTime) < this.javaCacheDuration) {
+            console.log('Using cached Java installations');
+            return this.cachedJavaInstallations;
+        }
+
+        console.log('Detecting Java installations...');
         const javaInstallations = [];
         const checkedPaths = new Set();
 
@@ -233,6 +283,10 @@ class GameManager {
 
         // Sortuj po wersji (najnowsza pierwsza)
         javaInstallations.sort((a, b) => b.version - a.version);
+
+        // Zapisz do cache
+        this.cachedJavaInstallations = javaInstallations;
+        this.javaCacheTime = now;
 
         return javaInstallations;
     }
@@ -544,10 +598,11 @@ class GameManager {
     }
 
     /**
-     * Synchronizuje pliki z serwerem - RÓWNOLEGŁE POBIERANIE
+     * Synchronizuje pliki z serwerem - RÓWNOLEGŁE POBIERANIE z optymalizacjami
      */
     async syncFiles(files, gamePath) {
         const CONCURRENT_DOWNLOADS = 5; // Liczba równoległych pobrań
+        const CONCURRENT_VERIFICATIONS = 10; // Liczba równoległych weryfikacji (optymalizacja)
         const MAX_RETRIES_PER_FILE = 3;
 
         const results = {
@@ -560,41 +615,53 @@ class GameManager {
         console.log(`\n========================================`);
         console.log(`Starting sync of ${files.length} files`);
         console.log(`Concurrent downloads: ${CONCURRENT_DOWNLOADS}`);
+        console.log(`Concurrent verifications: ${CONCURRENT_VERIFICATIONS}`);
         console.log(`========================================\n`);
 
-        // FAZA 1: Sprawdź które pliki wymagają pobrania
+        // FAZA 1: Sprawdź które pliki wymagają pobrania - RÓWNOLEGLE
         this.sendToRenderer('game-status', { status: 'Sprawdzanie plików...' });
 
         const filesToDownload = [];
         let checkedCount = 0;
 
-        for (const file of files) {
-            checkedCount++;
+        // Przygotuj wszystkie pliki z ich ścieżkami
+        const fileChecks = files.map(file => {
             const relativePath = file.path || `mods/${file.filename}`;
             const destPath = path.join(gamePath, relativePath);
             const fileName = file.filename || path.basename(destPath);
-
             this.ensureDir(path.dirname(destPath));
+            return { file, destPath, fileName, relativePath };
+        });
 
-            const check = await this.checkFileNeedsDownload(file, destPath);
+        // Weryfikuj pliki równolegle (w grupach)
+        for (let i = 0; i < fileChecks.length; i += CONCURRENT_VERIFICATIONS) {
+            const batch = fileChecks.slice(i, i + CONCURRENT_VERIFICATIONS);
 
-            if (check.needsDownload) {
-                filesToDownload.push({
-                    ...file,
-                    destPath,
-                    fileName,
-                    relativePath
-                });
-            } else {
-                results.skipped.push(fileName);
+            const batchResults = await Promise.all(
+                batch.map(async ({ file, destPath, fileName, relativePath }) => {
+                    const check = await this.checkFileNeedsDownload(file, destPath);
+                    return { file, destPath, fileName, relativePath, needsDownload: check.needsDownload };
+                })
+            );
+
+            for (const result of batchResults) {
+                checkedCount++;
+                if (result.needsDownload) {
+                    filesToDownload.push({
+                        ...result.file,
+                        destPath: result.destPath,
+                        fileName: result.fileName,
+                        relativePath: result.relativePath
+                    });
+                } else {
+                    results.skipped.push(result.fileName);
+                }
             }
 
-            // Aktualizuj postęp sprawdzania
-            if (checkedCount % 50 === 0 || checkedCount === files.length) {
-                this.sendToRenderer('game-status', {
-                    status: `Sprawdzanie plików... (${checkedCount}/${files.length})`
-                });
-            }
+            // Aktualizuj postęp sprawdzania (throttled)
+            this.sendThrottledProgress('game-status', {
+                status: `Sprawdzanie plików... (${checkedCount}/${files.length})`
+            });
         }
 
         console.log(`\nFiles to download: ${filesToDownload.length}`);
@@ -629,7 +696,7 @@ class GameManager {
 
                     for (let retry = 0; retry < MAX_RETRIES_PER_FILE && !success; retry++) {
                         try {
-                            this.sendToRenderer('download-progress', {
+                            this.sendThrottledProgress('download-progress', {
                                 type: 'file',
                                 name: file.fileName,
                                 current: downloadedCount + 1,
@@ -639,7 +706,8 @@ class GameManager {
                             });
 
                             await this.downloadAndVerifyFile(file, file.destPath, (bytes, total) => {
-                                this.sendToRenderer('download-progress', {
+                                // Używamy throttled progress dla mniejszego obciążenia CPU
+                                this.sendThrottledProgress('download-progress', {
                                     type: 'file',
                                     name: file.fileName,
                                     current: downloadedCount + 1,
@@ -804,6 +872,23 @@ class GameManager {
                 });
             } else {
                 console.log('No files to sync');
+            }
+
+            // Zapisz konfigurację serwera dla moda XsusMenu
+            // Mod czyta ten plik by wyświetlić przycisk "Połącz z [server]" w menu
+            this.sendToRenderer('game-status', { status: 'Zapisywanie konfiguracji serwera...' });
+            try {
+                const serverConfigPath = path.join(gamePath, 'xsus_server.json');
+                const serverConfig = {
+                    serverIp: config.serverIp || 'localhost',
+                    serverPort: config.serverPort || 25565,
+                    serverName: config.serverName || 'XsusServer',
+                    lastUpdated: new Date().toISOString()
+                };
+                fs.writeFileSync(serverConfigPath, JSON.stringify(serverConfig, null, 2));
+                console.log('Server config written to:', serverConfigPath);
+            } catch (error) {
+                console.warn('Failed to write server config:', error);
             }
 
             // Przygotuj opcje uruchomienia

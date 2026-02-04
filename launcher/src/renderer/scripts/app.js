@@ -729,6 +729,22 @@ async function initSettings() {
 }
 
 async function getSettings() {
+    // Użyj batch operation dla optymalizacji (1 IPC call zamiast 9)
+    if (window.electronAPI?.getStoreMultiple) {
+        const data = await window.electronAPI.getStoreMultiple([
+            'ram', 'javaPath', 'customJavaArgs', 'resolution', 'closeOnLaunch', 'autoUpdate'
+        ]);
+        return {
+            ram: data.ram || { min: 2, max: 4 },
+            javaPath: data.javaPath || '',
+            customJavaArgs: data.customJavaArgs || '',
+            resolution: data.resolution || { width: 1280, height: 720, fullscreen: false },
+            closeOnLaunch: data.closeOnLaunch || false,
+            autoUpdate: data.autoUpdate !== false
+        };
+    }
+
+    // Fallback dla starszych wersji
     return {
         ram: {
             min: await window.electronAPI?.getStore('ram.min') || 2,
@@ -747,19 +763,39 @@ async function getSettings() {
 }
 
 async function saveSettings() {
-    await window.electronAPI?.setStore('ram', {
-        min: parseInt(elements.ramMin.value),
-        max: parseInt(elements.ramMax.value)
-    });
-    await window.electronAPI?.setStore('javaPath', elements.javaPath.value);
-    await window.electronAPI?.setStore('customJavaArgs', elements.customJavaArgs.value);
-    await window.electronAPI?.setStore('resolution', {
-        width: parseInt(elements.resWidth.value),
-        height: parseInt(elements.resHeight.value),
-        fullscreen: elements.fullscreen.checked
-    });
-    await window.electronAPI?.setStore('closeOnLaunch', elements.closeOnLaunch.checked);
-    await window.electronAPI?.setStore('autoUpdate', elements.autoUpdate.checked);
+    // Użyj batch operation dla optymalizacji (1 IPC call zamiast 6)
+    if (window.electronAPI?.setStoreMultiple) {
+        await window.electronAPI.setStoreMultiple({
+            ram: {
+                min: parseInt(elements.ramMin.value),
+                max: parseInt(elements.ramMax.value)
+            },
+            javaPath: elements.javaPath.value,
+            customJavaArgs: elements.customJavaArgs.value,
+            resolution: {
+                width: parseInt(elements.resWidth.value),
+                height: parseInt(elements.resHeight.value),
+                fullscreen: elements.fullscreen.checked
+            },
+            closeOnLaunch: elements.closeOnLaunch.checked,
+            autoUpdate: elements.autoUpdate.checked
+        });
+    } else {
+        // Fallback
+        await window.electronAPI?.setStore('ram', {
+            min: parseInt(elements.ramMin.value),
+            max: parseInt(elements.ramMax.value)
+        });
+        await window.electronAPI?.setStore('javaPath', elements.javaPath.value);
+        await window.electronAPI?.setStore('customJavaArgs', elements.customJavaArgs.value);
+        await window.electronAPI?.setStore('resolution', {
+            width: parseInt(elements.resWidth.value),
+            height: parseInt(elements.resHeight.value),
+            fullscreen: elements.fullscreen.checked
+        });
+        await window.electronAPI?.setStore('closeOnLaunch', elements.closeOnLaunch.checked);
+        await window.electronAPI?.setStore('autoUpdate', elements.autoUpdate.checked);
+    }
 
     showToast('Ustawienia zapisane!', 'success');
 }

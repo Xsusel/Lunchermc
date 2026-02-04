@@ -52,6 +52,29 @@
     --transition: all 0.2s ease;
 }
 
+/* ============================================
+   OPTYMALIZACJE DLA SŁABSZYCH PC
+   ============================================ */
+
+/* Wyłącz ciężkie animacje gdy użytkownik preferuje reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* Optymalizacje GPU - hardware acceleration dla często zmienianych elementów */
+.progress-fill,
+.modal,
+.toast,
+.page {
+    will-change: transform, opacity;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+}
+
 body {
     font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg-primary);
@@ -546,12 +569,19 @@ body {
     right: 0;
     bottom: 0;
     background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-    animation: shimmer 1.5s infinite;
+    animation: shimmer 2s infinite;
+    /* Optymalizacja: używamy transform zamiast left/right */
+    will-change: transform;
 }
 
 @keyframes shimmer {
     0% { transform: translateX(-100%); }
     100% { transform: translateX(100%); }
+}
+
+/* Klasa dla trybu oszczędzania energii - wyłącza animacje shimmer */
+.low-performance .progress-fill::after {
+    animation: none;
 }
 
 .progress-glow {
