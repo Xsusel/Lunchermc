@@ -9,7 +9,6 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { WebSocketServer } from 'ws';
 import http from 'http';
 
 import { authRoutes, adminRoutes, launcherRoutes, downloadRoutes, systemRoutes } from './routes/index.js';
@@ -18,6 +17,7 @@ import filesRoutes from './routes/files.js';
 import { apiLimiter, errorHandler, notFoundHandler } from './middleware/index.js';
 import { ensureDir, getUploadsPath, getModsPath } from './utils/helpers.js';
 import { startAutoBackup, stopAutoBackup } from './utils/backup.js';
+import wsManager from './utils/wsManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,72 +119,52 @@ app.use('/api/files', filesRoutes); // Zarządzanie plikami (configs, resourcepa
 // WEBSOCKET DLA POWIADOMIEŃ REAL-TIME
 // ============================================
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+// Inicjalizuj WebSocket Manager
+wsManager.init(server, '/ws');
 
-// Przechowujemy połączonych klientów
-const clients = new Set();
-
-wss.on('connection', (ws, req) => {
-    console.log('🔌 Nowe połączenie WebSocket');
-    clients.add(ws);
-
-    // Wysyłamy potwierdzenie połączenia
-    ws.send(JSON.stringify({
-        type: 'connected',
-        message: 'Połączono z serwerem',
-        timestamp: new Date().toISOString()
-    }));
-
-    // Obsługa wiadomości od klienta
-    ws.on('message', (data) => {
-        try {
-            const message = JSON.parse(data.toString());
-            console.log('📨 Otrzymano wiadomość:', message);
-
-            // Obsługujemy różne typy wiadomości
-            if (message.type === 'ping') {
-                ws.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }));
-            }
-        } catch (error) {
-            console.error('Błąd parsowania wiadomości WebSocket:', error);
-        }
-    });
-
-    // Obsługa rozłączenia
-    ws.on('close', () => {
-        console.log('🔌 Rozłączono WebSocket');
-        clients.delete(ws);
-    });
-
-    // Obsługa błędów
-    ws.on('error', (error) => {
-        console.error('Błąd WebSocket:', error);
-        clients.delete(ws);
-    });
-});
-
-// Funkcja do wysyłania broadcast do wszystkich klientów
+// Funkcja do wysyłania broadcast (eksportowana dla kompatybilności)
 export const broadcastMessage = (type, data) => {
-    const message = JSON.stringify({
-        type,
-        data,
-        timestamp: new Date().toISOString()
-    });
-
-    clients.forEach((client) => {
-        if (client.readyState === 1) { // OPEN
-            client.send(message);
-        }
-    });
+    return wsManager.broadcast(type, data);
 };
 
 // Endpoint do wysyłania broadcast (dla panelu admina)
 app.post('/api/admin/broadcast-ws', (req, res) => {
-    // Ten endpoint powinien być chroniony przez authenticateAdmin
-    // ale dla uproszczenia pomijamy tutaj
-    const { type, data } = req.body;
-    broadcastMessage(type, data);
-    res.json({ success: true, message: 'Broadcast wysłany' });
+    const { type, data, channel } = req.body;
+    const sent = wsManager.broadcast(type, data, channel || 'broadcast');
+    res.json({ success: true, message: 'Broadcast wysłany', clientsNotified: sent });
+});
+
+// Endpoint - statystyki WebSocket
+app.get('/api/admin/ws/stats', (req, res) => {
+    res.json({
+        success: true,
+        data: wsManager.getStats()
+    });
+});
+
+// Endpoint - połączeni klienci
+app.get('/api/admin/ws/clients', (req, res) => {
+    res.json({
+        success: true,
+        data: wsManager.getConnectedClients()
+    });
+});
+
+// Endpoint - wysłanie announcement
+app.post('/api/admin/ws/announcement', (req, res) => {
+    const { title, message, type } = req.body;
+    if (!title || !message) {
+        return res.status(400).json({ success: false, error: 'Wymagane: title, message' });
+    }
+    const sent = wsManager.sendAnnouncement(title, message, type || 'info');
+    res.json({ success: true, message: 'Announcement wysłany', clientsNotified: sent });
+});
+
+// Endpoint - powiadomienie o maintenance
+app.post('/api/admin/ws/maintenance', (req, res) => {
+    const { enabled, message } = req.body;
+    const sent = wsManager.notifyMaintenance(!!enabled, message || '');
+    res.json({ success: true, message: 'Powiadomienie maintenance wysłane', clientsNotified: sent });
 });
 
 // ============================================
@@ -236,9 +216,7 @@ const shutdown = () => {
     stopAutoBackup();
 
     // Zamykamy połączenia WebSocket
-    clients.forEach((client) => {
-        client.close(1000, 'Serwer jest zamykany');
-    });
+    wsManager.closeAll();
 
     server.close(() => {
         console.log('✅ Serwer został zatrzymany');
