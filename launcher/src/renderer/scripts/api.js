@@ -235,6 +235,61 @@ class ApiClient {
             forceRefresh
         });
     }
+
+    // ============================================
+    // REGULAMIN SERWERA
+    // ============================================
+
+    /**
+     * Pobiera aktywny regulamin serwera
+     */
+    async getServerRules() {
+        return this.request('/launcher/rules');
+    }
+
+    /**
+     * Sprawdza czy użytkownik zaakceptował regulamin
+     */
+    async checkRulesAcceptance() {
+        return this.request('/launcher/rules/check');
+    }
+
+    /**
+     * Akceptuje regulamin serwera
+     */
+    async acceptRules() {
+        return this.request('/launcher/rules/accept', {
+            method: 'POST'
+        });
+    }
+
+    // ============================================
+    // AKTUALNOŚCI (NEWS)
+    // ============================================
+
+    /**
+     * Pobiera listę aktualności
+     */
+    async getNews(options = {}) {
+        const params = new URLSearchParams();
+        if (options.limit) params.set('limit', options.limit);
+        if (options.offset) params.set('offset', options.offset);
+        if (options.type) params.set('type', options.type);
+        if (options.tag) params.set('tag', options.tag);
+
+        const queryString = params.toString();
+        return this.request(`/launcher/news${queryString ? '?' + queryString : ''}`, {}, {
+            useCache: true,
+            cacheTTL: 60 * 1000 // 1 minuta cache
+        });
+    }
+
+    /**
+     * Pobiera szczegóły aktualności
+     */
+    async getNewsDetails(id) {
+        return this.request(`/launcher/news/${id}`);
+    }
 }
 
 // Eksportujemy instancję

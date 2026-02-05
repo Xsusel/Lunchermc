@@ -35,6 +35,28 @@ export const calculateSHA256FromBuffer = (buffer) => {
 };
 
 /**
+ * Weryfikuje integralność pliku porównując SHA256
+ * @param {string} filePath - Ścieżka do pliku
+ * @param {string} expectedSha256 - Oczekiwana suma kontrolna
+ * @returns {Promise<{valid: boolean, actual: string}>}
+ */
+export const verifyFileSHA256 = async (filePath, expectedSha256) => {
+    try {
+        if (!fs.existsSync(filePath)) {
+            return { valid: false, actual: null, error: 'file_not_found' };
+        }
+        const actual = await calculateSHA256(filePath);
+        return {
+            valid: actual === expectedSha256,
+            actual,
+            expected: expectedSha256
+        };
+    } catch (error) {
+        return { valid: false, actual: null, error: error.message };
+    }
+};
+
+/**
  * Generuje losowy token
  * @param {number} length - Długość tokenu w bajtach
  * @returns {string} Token w formacie hex

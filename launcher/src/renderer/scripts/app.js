@@ -12,7 +12,10 @@ const state = {
     config: null,
     isLoggedIn: false,
     isLoading: false,
-    serverOnline: true
+    serverOnline: true,
+    currentTheme: 'dark',
+    rulesAccepted: false,
+    pendingRules: null
 };
 
 // ============================================
@@ -68,6 +71,7 @@ const elements = {
     closeOnLaunch: document.getElementById('close-on-launch'),
     autoUpdate: document.getElementById('auto-update'),
     gamePath: document.getElementById('game-path'),
+    themeSelect: document.getElementById('theme-select'),
     btnGameBrowse: document.getElementById('btn-game-browse'),
     btnOpenFolder: document.getElementById('btn-open-folder'),
     btnResetSettings: document.getElementById('btn-reset-settings'),
@@ -94,6 +98,28 @@ const elements = {
     registerModalClose: document.getElementById('register-modal-close'),
     linkLogin: document.getElementById('link-login'),
 
+    // Changelog modal
+    changelogModal: document.getElementById('changelog-modal'),
+    changelogModalClose: document.getElementById('changelog-modal-close'),
+    changelogVersion: document.getElementById('changelog-version'),
+    changelogContent: document.getElementById('changelog-content'),
+    btnChangelogClose: document.getElementById('btn-changelog-close'),
+
+    // Rules modal
+    rulesModal: document.getElementById('rules-modal'),
+    rulesModalClose: document.getElementById('rules-modal-close'),
+    rulesTitle: document.getElementById('rules-title'),
+    rulesVersion: document.getElementById('rules-version'),
+    rulesContent: document.getElementById('rules-content'),
+    rulesAcceptCheckbox: document.getElementById('rules-accept-checkbox'),
+    btnRulesAccept: document.getElementById('btn-rules-accept'),
+    btnRulesDecline: document.getElementById('btn-rules-decline'),
+
+    // News section
+    newsSection: document.getElementById('news-section'),
+    newsContainer: document.getElementById('news-container'),
+    newsToggle: document.getElementById('news-toggle'),
+
     // Toast
     toastContainer: document.getElementById('toast-container')
 };
@@ -103,6 +129,9 @@ const elements = {
 // ============================================
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('XsusLauncher inicjalizacja...');
+
+    // Załaduj zapisany motyw przed inicjalizacją UI
+    await initTheme();
 
     // Inicjalizuj przyciski okna
     initWindowControls();
@@ -122,14 +151,83 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Pobierz konfigurację serwera
     await loadServerConfig();
 
+    // Pobierz aktualności
+    await loadNews();
+
+    // Inicjalizuj sekcję aktualności
+    initNewsSection();
+
     // Pobierz wersję launchera
     await loadLauncherVersion();
 
     // Inicjalizuj przycisk graj
     initPlayButton();
 
+    // Sprawdź czy pokazać changelog (nowa wersja)
+    await checkChangelog();
+
     console.log('XsusLauncher gotowy!');
 });
+
+// ============================================
+// MOTYWY
+// ============================================
+
+/**
+ * Inicjalizuje system motywów
+ */
+async function initTheme() {
+    try {
+        const themeData = await window.electronAPI?.themes?.getCurrent();
+        if (themeData && themeData.variables) {
+            applyThemeVariables(themeData.variables);
+            state.currentTheme = themeData.id;
+        }
+    } catch (e) {
+        console.warn('Nie udało się załadować motywu:', e);
+    }
+}
+
+/**
+ * Aplikuje zmienne CSS motywu
+ */
+function applyThemeVariables(variables) {
+    const root = document.documentElement;
+    for (const [key, value] of Object.entries(variables)) {
+        root.style.setProperty(key, value);
+    }
+}
+
+/**
+ * Zmienia motyw
+ */
+async function changeTheme(themeId) {
+    try {
+        const result = await window.electronAPI?.themes?.setTheme(themeId);
+        if (result && result.success) {
+            applyThemeVariables(result.variables);
+            state.currentTheme = themeId;
+            showToast('Motyw zmieniony', 'success');
+            return true;
+        }
+    } catch (e) {
+        console.error('Błąd zmiany motywu:', e);
+        showToast('Błąd zmiany motywu', 'error');
+    }
+    return false;
+}
+
+/**
+ * Pobiera listę dostępnych motywów
+ */
+async function getAvailableThemes() {
+    try {
+        return await window.electronAPI?.themes?.getAvailable() || [];
+    } catch (e) {
+        console.error('Błąd pobierania motywów:', e);
+        return [];
+    }
+}
 
 // ============================================
 // KONTROLKI OKNA
@@ -214,27 +312,72 @@ function initModals() {
         if (e.target === elements.registerModal) closeModal('register');
     });
 
+    // Changelog modal
+    elements.changelogModalClose?.addEventListener('click', () => closeModal('changelog'));
+    elements.btnChangelogClose?.addEventListener('click', () => closeModal('changelog'));
+    elements.changelogModal?.addEventListener('click', (e) => {
+        if (e.target === elements.changelogModal) closeModal('changelog');
+    });
+
+    // Rules modal
+    elements.rulesModalClose?.addEventListener('click', () => closeModal('rules'));
+    elements.btnRulesDecline?.addEventListener('click', () => closeModal('rules'));
+    elements.rulesModal?.addEventListener('click', (e) => {
+        if (e.target === elements.rulesModal) closeModal('rules');
+    });
+
+    // Checkbox akceptacji
+    elements.rulesAcceptCheckbox?.addEventListener('change', (e) => {
+        if (elements.btnRulesAccept) {
+            elements.btnRulesAccept.disabled = !e.target.checked;
+        }
+    });
+
+    // Przycisk akceptacji
+    elements.btnRulesAccept?.addEventListener('click', handleRulesAccept);
+
     // Formularze
     elements.loginForm?.addEventListener('submit', handleLogin);
     elements.registerForm?.addEventListener('submit', handleRegister);
 }
 
 function openModal(name) {
-    const modal = name === 'login' ? elements.loginModal : elements.registerModal;
+    let modal;
+    if (name === 'login') modal = elements.loginModal;
+    else if (name === 'register') modal = elements.registerModal;
+    else if (name === 'changelog') modal = elements.changelogModal;
+    else if (name === 'rules') modal = elements.rulesModal;
+
     modal?.classList.add('active');
 }
 
 function closeModal(name) {
-    const modal = name === 'login' ? elements.loginModal : elements.registerModal;
+    let modal;
+    if (name === 'login') modal = elements.loginModal;
+    else if (name === 'register') modal = elements.registerModal;
+    else if (name === 'changelog') modal = elements.changelogModal;
+    else if (name === 'rules') modal = elements.rulesModal;
+
     modal?.classList.remove('active');
 
     // Wyczyść błędy
     if (name === 'login') {
         elements.loginError.classList.remove('active');
         elements.loginError.textContent = '';
-    } else {
+    } else if (name === 'register') {
         elements.registerError.classList.remove('active');
         elements.registerError.textContent = '';
+    } else if (name === 'changelog') {
+        // Oznacz changelog jako widziany przy zamknięciu
+        window.electronAPI?.markChangelogSeen();
+    } else if (name === 'rules') {
+        // Reset checkboxa
+        if (elements.rulesAcceptCheckbox) {
+            elements.rulesAcceptCheckbox.checked = false;
+        }
+        if (elements.btnRulesAccept) {
+            elements.btnRulesAccept.disabled = true;
+        }
     }
 }
 
@@ -542,6 +685,13 @@ async function handlePlay() {
         return;
     }
 
+    // Sprawdź czy użytkownik zaakceptował regulamin
+    const rulesCheck = await checkRules();
+    if (rulesCheck.needsAcceptance) {
+        showRulesModal(rulesCheck.rules);
+        return;
+    }
+
     // Pobierz ustawienia
     const settings = await getSettings();
 
@@ -726,6 +876,44 @@ async function initSettings() {
 
     elements.btnResetSettings?.addEventListener('click', resetSettings);
     elements.btnSaveSettings?.addEventListener('click', saveSettings);
+
+    // Inicjalizuj selektor motywów
+    await initThemeSelector();
+}
+
+/**
+ * Inicjalizuje selektor motywów
+ */
+async function initThemeSelector() {
+    if (!elements.themeSelect) return;
+
+    try {
+        // Pobierz dostępne motywy
+        const themes = await getAvailableThemes();
+
+        // Wyczyść i wypełnij select
+        elements.themeSelect.innerHTML = '';
+
+        for (const theme of themes) {
+            const option = document.createElement('option');
+            option.value = theme.id;
+            option.textContent = theme.name;
+            option.title = theme.description;
+            elements.themeSelect.appendChild(option);
+        }
+
+        // Ustaw aktualny motyw
+        elements.themeSelect.value = state.currentTheme;
+
+        // Listener dla zmiany motywu
+        elements.themeSelect.addEventListener('change', async (e) => {
+            const themeId = e.target.value;
+            await changeTheme(themeId);
+        });
+
+    } catch (e) {
+        console.error('Błąd inicjalizacji selektora motywów:', e);
+    }
 }
 
 async function getSettings() {
@@ -832,6 +1020,91 @@ async function loadLauncherVersion() {
 }
 
 // ============================================
+// CHANGELOG
+// ============================================
+async function checkChangelog() {
+    try {
+        const result = await window.electronAPI?.shouldShowChangelog();
+        if (result?.show && result?.changelog) {
+            showChangelog(result.version, result.changelog);
+        }
+    } catch (error) {
+        console.warn('Failed to check changelog:', error);
+    }
+}
+
+function showChangelog(version, changelog) {
+    // Ustaw wersję
+    if (elements.changelogVersion) {
+        elements.changelogVersion.textContent = version;
+    }
+
+    // Buduj zawartość
+    if (elements.changelogContent && changelog) {
+        let html = '';
+
+        // Sekcja "Nowe"
+        if (changelog.sections?.new?.length > 0) {
+            html += `
+                <div class="changelog-section">
+                    <h4 class="changelog-section-title new">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Nowe funkcje
+                    </h4>
+                    <ul class="changelog-list">
+                        ${changelog.sections.new.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        // Sekcja "Ulepszenia"
+        if (changelog.sections?.improved?.length > 0) {
+            html += `
+                <div class="changelog-section">
+                    <h4 class="changelog-section-title improved">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+                            <polyline points="17 6 23 6 23 12"/>
+                        </svg>
+                        Ulepszenia
+                    </h4>
+                    <ul class="changelog-list">
+                        ${changelog.sections.improved.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        // Sekcja "Naprawione"
+        if (changelog.sections?.fixed?.length > 0) {
+            html += `
+                <div class="changelog-section">
+                    <h4 class="changelog-section-title fixed">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                            <polyline points="22 4 12 14.01 9 11.01"/>
+                        </svg>
+                        Naprawione błędy
+                    </h4>
+                    <ul class="changelog-list">
+                        ${changelog.sections.fixed.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+
+        elements.changelogContent.innerHTML = html;
+    }
+
+    // Otwórz modal
+    openModal('changelog');
+}
+
+// ============================================
 // POMOCNICZE
 // ============================================
 function showToast(message, type = 'info') {
@@ -852,6 +1125,287 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ============================================
+// AKTUALNOŚCI (NEWS)
+// ============================================
+
+/**
+ * Ładuje aktualności z serwera
+ */
+async function loadNews() {
+    try {
+        const response = await api.getNews({ limit: 5 });
+
+        if (response.success && response.data) {
+            displayNews(response.data);
+        }
+    } catch (error) {
+        console.warn('Błąd ładowania aktualności:', error);
+        // Ukryj sekcję aktualności jeśli błąd
+        if (elements.newsSection) {
+            elements.newsSection.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * Inicjalizuje sekcję aktualności
+ */
+function initNewsSection() {
+    // Toggle zwijania/rozwijania
+    elements.newsToggle?.addEventListener('click', () => {
+        elements.newsSection?.classList.toggle('collapsed');
+    });
+}
+
+/**
+ * Wyświetla aktualności
+ */
+function displayNews(newsList) {
+    if (!elements.newsContainer) return;
+
+    if (!newsList || newsList.length === 0) {
+        elements.newsSection.style.display = 'none';
+        return;
+    }
+
+    elements.newsSection.style.display = 'block';
+
+    const typeLabels = {
+        news: 'Wiadomość',
+        update: 'Aktualizacja',
+        event: 'Wydarzenie',
+        maintenance: 'Konserwacja',
+        announcement: 'Ogłoszenie'
+    };
+
+    elements.newsContainer.innerHTML = newsList.map(item => `
+        <div class="news-item ${item.is_pinned ? 'pinned' : ''}" data-news-id="${item.id}">
+            <div class="news-item-header">
+                <span class="news-type ${item.type}">${typeLabels[item.type] || item.type}</span>
+                ${item.is_pinned ? `
+                    <svg class="news-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                        <path d="M12 2v20M2 12h20"/>
+                    </svg>
+                ` : ''}
+            </div>
+            <h4 class="news-item-title">${escapeHtml(item.title)}</h4>
+            <p class="news-item-summary">${escapeHtml(item.summary || '')}</p>
+            <div class="news-item-footer">
+                <span class="news-item-date">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 6v6l4 2"/>
+                    </svg>
+                    ${formatNewsDate(item.published_at)}
+                </span>
+                ${item.tags && item.tags.length > 0 ? `
+                    <div class="news-item-tags">
+                        ${item.tags.slice(0, 2).map(tag => `<span class="news-tag">${escapeHtml(tag)}</span>`).join('')}
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `).join('');
+
+    // Dodaj event listenery do kliknięcia
+    elements.newsContainer.querySelectorAll('.news-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const newsId = item.dataset.newsId;
+            showNewsDetails(newsId);
+        });
+    });
+}
+
+/**
+ * Formatuje datę aktualności
+ */
+function formatNewsDate(dateStr) {
+    if (!dateStr) return '';
+
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffMins < 60) {
+        return `${diffMins} min temu`;
+    } else if (diffHours < 24) {
+        return `${diffHours} godz. temu`;
+    } else if (diffDays < 7) {
+        return `${diffDays} dni temu`;
+    } else {
+        return date.toLocaleDateString('pl-PL');
+    }
+}
+
+/**
+ * Wyświetla szczegóły aktualności
+ */
+async function showNewsDetails(newsId) {
+    try {
+        const response = await api.getNewsDetails(newsId);
+
+        if (response.success && response.data) {
+            const news = response.data;
+
+            const typeLabels = {
+                news: 'Wiadomość',
+                update: 'Aktualizacja',
+                event: 'Wydarzenie',
+                maintenance: 'Konserwacja',
+                announcement: 'Ogłoszenie'
+            };
+
+            // Prosta konwersja markdown
+            let content = escapeHtml(news.content);
+            content = content.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+            content = content.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+            content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            content = content.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+            content = content.replace(/^- (.+)$/gm, '<li>$1</li>');
+            content = content.replace(/\n\n/g, '</p><p>');
+            content = '<p>' + content + '</p>';
+
+            showToast(`Czytasz: ${news.title}`, 'info');
+
+            // Można też pokazać modal z pełną treścią
+            // Na razie pokazujemy toast - można rozbudować o modal
+        }
+    } catch (error) {
+        console.error('Błąd ładowania szczegółów aktualności:', error);
+    }
+}
+
+// ============================================
+// REGULAMIN SERWERA
+// ============================================
+
+/**
+ * Sprawdza czy użytkownik musi zaakceptować regulamin
+ * @returns {Promise<{needsAcceptance: boolean, rules: object|null}>}
+ */
+async function checkRules() {
+    if (!state.isLoggedIn || !state.token) {
+        return { needsAcceptance: false, rules: null };
+    }
+
+    try {
+        const response = await api.checkRulesAcceptance();
+
+        if (response.success && response.data) {
+            state.rulesAccepted = response.data.accepted;
+
+            if (!response.data.accepted && response.data.rules) {
+                state.pendingRules = response.data.rules;
+                return { needsAcceptance: true, rules: response.data.rules };
+            }
+        }
+
+        return { needsAcceptance: false, rules: null };
+    } catch (error) {
+        console.warn('Błąd sprawdzania regulaminu:', error);
+        // W przypadku błędu pozwalamy grać
+        return { needsAcceptance: false, rules: null };
+    }
+}
+
+/**
+ * Wyświetla modal z regulaminem
+ */
+function showRulesModal(rules) {
+    if (!rules) return;
+
+    // Ustaw tytuł
+    if (elements.rulesTitle) {
+        elements.rulesTitle.textContent = rules.title || 'Regulamin Serwera';
+    }
+
+    // Ustaw wersję
+    if (elements.rulesVersion) {
+        elements.rulesVersion.textContent = `Wersja: ${rules.version}`;
+    }
+
+    // Ustaw treść (konwertuj markdown na HTML jeśli potrzeba)
+    if (elements.rulesContent) {
+        // Prosta konwersja markdown - nagłówki i listy
+        let html = escapeHtml(rules.content);
+
+        // Nagłówki ## -> h3
+        html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+
+        // Pogrubienie **text**
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+        // Lista numerowana
+        html = html.replace(/^\d+\. (.+)$/gm, '<li class="numbered">$1</li>');
+
+        // Lista punktowana
+        html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+
+        // Nowe linie
+        html = html.replace(/\n\n/g, '</p><p>');
+        html = '<p>' + html + '</p>';
+
+        elements.rulesContent.innerHTML = html;
+    }
+
+    // Reset checkboxa i przycisku
+    if (elements.rulesAcceptCheckbox) {
+        elements.rulesAcceptCheckbox.checked = false;
+    }
+    if (elements.btnRulesAccept) {
+        elements.btnRulesAccept.disabled = true;
+    }
+
+    // Otwórz modal
+    openModal('rules');
+}
+
+/**
+ * Obsługuje akceptację regulaminu
+ */
+async function handleRulesAccept() {
+    if (!elements.rulesAcceptCheckbox?.checked) {
+        showToast('Musisz zaznaczyć akceptację regulaminu', 'warning');
+        return;
+    }
+
+    // Disable button during request
+    if (elements.btnRulesAccept) {
+        elements.btnRulesAccept.disabled = true;
+        elements.btnRulesAccept.textContent = 'Akceptowanie...';
+    }
+
+    try {
+        const response = await api.acceptRules();
+
+        if (response.success) {
+            state.rulesAccepted = true;
+            state.pendingRules = null;
+
+            closeModal('rules');
+            showToast('Regulamin zaakceptowany!', 'success');
+
+            // Uruchom grę po akceptacji
+            handlePlay();
+        } else {
+            showToast(response.error || 'Błąd akceptacji regulaminu', 'error');
+        }
+    } catch (error) {
+        console.error('Błąd akceptacji regulaminu:', error);
+        showToast('Błąd akceptacji regulaminu', 'error');
+    } finally {
+        if (elements.btnRulesAccept) {
+            elements.btnRulesAccept.textContent = 'Akceptuję i chcę grać';
+            elements.btnRulesAccept.disabled = !elements.rulesAcceptCheckbox?.checked;
+        }
+    }
 }
 
 // Odświeżaj konfigurację co 5 minut

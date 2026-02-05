@@ -9,7 +9,6 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { WebSocketServer } from 'ws';
 import http from 'http';
 
 import { authRoutes, adminRoutes, launcherRoutes, downloadRoutes, systemRoutes } from './routes/index.js';
@@ -17,6 +16,9 @@ import versionsRoutes from './routes/versions.js';
 import filesRoutes from './routes/files.js';
 import { apiLimiter, errorHandler, notFoundHandler } from './middleware/index.js';
 import { ensureDir, getUploadsPath, getModsPath } from './utils/helpers.js';
+import { startAutoBackup, stopAutoBackup } from './utils/backup.js';
+import wsManager from './utils/wsManager.js';
+import { ScheduledMaintenance } from './models/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,7 +97,7 @@ app.get('/api', (req, res) => {
     });
 });
 
-// Health check
+// Health check - prosty
 app.get('/api/health', (req, res) => {
     res.json({
         success: true,
@@ -104,6 +106,105 @@ app.get('/api/health', (req, res) => {
         uptime: process.uptime()
     });
 });
+
+// Health check - rozszerzony (dla monitoringu)
+app.get('/api/health/detailed', async (req, res) => {
+    const os = await import('os');
+    const fs = await import('fs');
+
+    // Informacje o pamięci
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+
+    // Informacje o procesie
+    const processMemory = process.memoryUsage();
+
+    // Sprawdź status bazy danych
+    let dbStatus = 'unknown';
+    try {
+        const db = (await import('./config/database.js')).default;
+        db.prepare('SELECT 1').get();
+        dbStatus = 'connected';
+    } catch (error) {
+        dbStatus = 'error: ' + error.message;
+    }
+
+    // Sprawdź dysk (folder uploads)
+    let diskStatus = { available: 0, total: 0 };
+    try {
+        const uploadsPath = getUploadsPath();
+        const stats = fs.statSync(uploadsPath);
+        // Na Linuxie możemy użyć statfs, ale tu uproszczenie
+        diskStatus = { path: uploadsPath, writable: true };
+    } catch (error) {
+        diskStatus = { error: error.message };
+    }
+
+    // WebSocket status
+    const wsStats = wsManager.getStats();
+
+    res.json({
+        success: true,
+        status: dbStatus === 'connected' ? 'healthy' : 'degraded',
+        timestamp: new Date().toISOString(),
+        uptime: {
+            seconds: Math.floor(process.uptime()),
+            formatted: formatUptime(process.uptime())
+        },
+        system: {
+            platform: os.platform(),
+            arch: os.arch(),
+            nodeVersion: process.version,
+            cpuCount: os.cpus().length,
+            loadAverage: os.loadavg()
+        },
+        memory: {
+            system: {
+                total: formatBytes(totalMem),
+                free: formatBytes(freeMem),
+                used: formatBytes(usedMem),
+                usagePercent: Math.round((usedMem / totalMem) * 100)
+            },
+            process: {
+                heapUsed: formatBytes(processMemory.heapUsed),
+                heapTotal: formatBytes(processMemory.heapTotal),
+                rss: formatBytes(processMemory.rss),
+                external: formatBytes(processMemory.external)
+            }
+        },
+        database: {
+            status: dbStatus
+        },
+        websocket: wsStats,
+        disk: diskStatus,
+        env: process.env.NODE_ENV || 'development'
+    });
+});
+
+// Helper funkcje
+function formatUptime(seconds) {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    parts.push(`${secs}s`);
+
+    return parts.join(' ');
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
 
 // Trasy z rate limitingiem
 app.use('/api/auth', apiLimiter, authRoutes);
@@ -118,72 +219,52 @@ app.use('/api/files', filesRoutes); // Zarządzanie plikami (configs, resourcepa
 // WEBSOCKET DLA POWIADOMIEŃ REAL-TIME
 // ============================================
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+// Inicjalizuj WebSocket Manager
+wsManager.init(server, '/ws');
 
-// Przechowujemy połączonych klientów
-const clients = new Set();
-
-wss.on('connection', (ws, req) => {
-    console.log('🔌 Nowe połączenie WebSocket');
-    clients.add(ws);
-
-    // Wysyłamy potwierdzenie połączenia
-    ws.send(JSON.stringify({
-        type: 'connected',
-        message: 'Połączono z serwerem',
-        timestamp: new Date().toISOString()
-    }));
-
-    // Obsługa wiadomości od klienta
-    ws.on('message', (data) => {
-        try {
-            const message = JSON.parse(data.toString());
-            console.log('📨 Otrzymano wiadomość:', message);
-
-            // Obsługujemy różne typy wiadomości
-            if (message.type === 'ping') {
-                ws.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }));
-            }
-        } catch (error) {
-            console.error('Błąd parsowania wiadomości WebSocket:', error);
-        }
-    });
-
-    // Obsługa rozłączenia
-    ws.on('close', () => {
-        console.log('🔌 Rozłączono WebSocket');
-        clients.delete(ws);
-    });
-
-    // Obsługa błędów
-    ws.on('error', (error) => {
-        console.error('Błąd WebSocket:', error);
-        clients.delete(ws);
-    });
-});
-
-// Funkcja do wysyłania broadcast do wszystkich klientów
+// Funkcja do wysyłania broadcast (eksportowana dla kompatybilności)
 export const broadcastMessage = (type, data) => {
-    const message = JSON.stringify({
-        type,
-        data,
-        timestamp: new Date().toISOString()
-    });
-
-    clients.forEach((client) => {
-        if (client.readyState === 1) { // OPEN
-            client.send(message);
-        }
-    });
+    return wsManager.broadcast(type, data);
 };
 
 // Endpoint do wysyłania broadcast (dla panelu admina)
 app.post('/api/admin/broadcast-ws', (req, res) => {
-    // Ten endpoint powinien być chroniony przez authenticateAdmin
-    // ale dla uproszczenia pomijamy tutaj
-    const { type, data } = req.body;
-    broadcastMessage(type, data);
-    res.json({ success: true, message: 'Broadcast wysłany' });
+    const { type, data, channel } = req.body;
+    const sent = wsManager.broadcast(type, data, channel || 'broadcast');
+    res.json({ success: true, message: 'Broadcast wysłany', clientsNotified: sent });
+});
+
+// Endpoint - statystyki WebSocket
+app.get('/api/admin/ws/stats', (req, res) => {
+    res.json({
+        success: true,
+        data: wsManager.getStats()
+    });
+});
+
+// Endpoint - połączeni klienci
+app.get('/api/admin/ws/clients', (req, res) => {
+    res.json({
+        success: true,
+        data: wsManager.getConnectedClients()
+    });
+});
+
+// Endpoint - wysłanie announcement
+app.post('/api/admin/ws/announcement', (req, res) => {
+    const { title, message, type } = req.body;
+    if (!title || !message) {
+        return res.status(400).json({ success: false, error: 'Wymagane: title, message' });
+    }
+    const sent = wsManager.sendAnnouncement(title, message, type || 'info');
+    res.json({ success: true, message: 'Announcement wysłany', clientsNotified: sent });
+});
+
+// Endpoint - powiadomienie o maintenance
+app.post('/api/admin/ws/maintenance', (req, res) => {
+    const { enabled, message } = req.body;
+    const sent = wsManager.notifyMaintenance(!!enabled, message || '');
+    res.json({ success: true, message: 'Powiadomienie maintenance wysłane', clientsNotified: sent });
 });
 
 // ============================================
@@ -219,7 +300,74 @@ server.listen(PORT, () => {
     console.log(`   • WebSocket:   ws://localhost:${PORT}/ws`);
     console.log('═══════════════════════════════════════════════════════════');
     console.log('');
+
+    // Uruchom automatyczne backupy bazy danych
+    startAutoBackup();
+
+    // Uruchom scheduler dla scheduled maintenance
+    startMaintenanceScheduler();
 });
+
+// ============================================
+// SCHEDULER DLA SCHEDULED MAINTENANCE
+// ============================================
+
+let maintenanceSchedulerInterval = null;
+
+/**
+ * Uruchamia scheduler sprawdzający zaplanowane maintenance
+ */
+function startMaintenanceScheduler() {
+    if (maintenanceSchedulerInterval) {
+        return;
+    }
+
+    // Sprawdzaj co minutę
+    maintenanceSchedulerInterval = setInterval(() => {
+        try {
+            const result = ScheduledMaintenance.checkAndApplyMaintenance();
+
+            if (result.action === 'enabled') {
+                // Powiadom klientów WebSocket o włączeniu maintenance
+                wsManager.notifyMaintenance(true, result.maintenance.message || result.maintenance.title);
+            } else if (result.action === 'disabled') {
+                // Powiadom klientów WebSocket o wyłączeniu maintenance
+                wsManager.notifyMaintenance(false, '');
+            }
+
+            // Sprawdź nadchodzące maintenance i wyślij powiadomienia
+            const approaching = ScheduledMaintenance.getApproachingMaintenance(5); // w ciągu 5 minut
+            for (const maint of approaching) {
+                const startTime = new Date(maint.start_time);
+                const now = new Date();
+                const minutesLeft = Math.ceil((startTime - now) / (1000 * 60));
+
+                if (minutesLeft > 0 && minutesLeft <= 5) {
+                    wsManager.sendAnnouncement(
+                        '⚠️ Przerwa techniczna',
+                        `Za ${minutesLeft} minut${minutesLeft === 1 ? 'ę' : minutesLeft < 5 ? 'y' : ''} rozpocznie się przerwa techniczna: ${maint.title}`,
+                        'warning'
+                    );
+                }
+            }
+        } catch (error) {
+            console.error('[MaintenanceScheduler] Błąd:', error);
+        }
+    }, 60 * 1000); // Co minutę
+
+    console.log('[MaintenanceScheduler] Scheduler uruchomiony');
+}
+
+/**
+ * Zatrzymuje scheduler maintenance
+ */
+function stopMaintenanceScheduler() {
+    if (maintenanceSchedulerInterval) {
+        clearInterval(maintenanceSchedulerInterval);
+        maintenanceSchedulerInterval = null;
+        console.log('[MaintenanceScheduler] Scheduler zatrzymany');
+    }
+}
 
 // ============================================
 // GRACEFUL SHUTDOWN
@@ -228,10 +376,14 @@ server.listen(PORT, () => {
 const shutdown = () => {
     console.log('\n🛑 Zatrzymywanie serwera...');
 
+    // Zatrzymaj automatyczne backupy
+    stopAutoBackup();
+
+    // Zatrzymaj scheduler maintenance
+    stopMaintenanceScheduler();
+
     // Zamykamy połączenia WebSocket
-    clients.forEach((client) => {
-        client.close(1000, 'Serwer jest zamykany');
-    });
+    wsManager.closeAll();
 
     server.close(() => {
         console.log('✅ Serwer został zatrzymany');

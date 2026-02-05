@@ -19,6 +19,15 @@ const crypto = require('crypto');
 const extractZip = require('extract-zip');
 const os = require('os');
 
+// Discord Rich Presence
+let discordRPC;
+try {
+    discordRPC = require('./discordRPC');
+} catch (e) {
+    console.warn('Discord RPC not available:', e.message);
+    discordRPC = null;
+}
+
 // Próba załadowania minecraft-launcher-core
 let Client;
 try {
@@ -1436,6 +1445,13 @@ class GameManager {
         // Przechowaj config dla crash reportera
         this.currentGameConfig = config;
 
+        // Discord Rich Presence - ustaw status uruchamiania
+        if (discordRPC) {
+            discordRPC.setUsername(config.username);
+            discordRPC.setServerName(config.serverName || 'XsusServer');
+            discordRPC.setLaunching();
+        }
+
         try {
             const gamePath = this.getGamePath();
             this.ensureDir(gamePath);
@@ -1702,6 +1718,11 @@ class GameManager {
                 this.gameProcess = await launcher.launch(launchOpts);
 
                 if (this.gameProcess) {
+                    // Discord Rich Presence - gra uruchomiona
+                    if (discordRPC) {
+                        discordRPC.setPlaying();
+                    }
+
                     // Zbieraj logi z stdout/stderr
                     if (this.gameProcess.stdout) {
                         this.gameProcess.stdout.on('data', (data) => {
@@ -1718,6 +1739,11 @@ class GameManager {
 
                     this.gameProcess.on('close', async (code) => {
                         console.log(`Game process closed with code: ${code}`);
+
+                        // Discord Rich Presence - gra zamknięta
+                        if (discordRPC) {
+                            discordRPC.setIdle();
+                        }
 
                         // Sprawdź czy to crash
                         const crashResult = await this.handleGameClose(code, this.currentGameConfig);
