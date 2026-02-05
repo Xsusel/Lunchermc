@@ -115,6 +115,11 @@ const elements = {
     btnRulesAccept: document.getElementById('btn-rules-accept'),
     btnRulesDecline: document.getElementById('btn-rules-decline'),
 
+    // News section
+    newsSection: document.getElementById('news-section'),
+    newsContainer: document.getElementById('news-container'),
+    newsToggle: document.getElementById('news-toggle'),
+
     // Toast
     toastContainer: document.getElementById('toast-container')
 };
@@ -145,6 +150,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Pobierz konfigurację serwera
     await loadServerConfig();
+
+    // Pobierz aktualności
+    await loadNews();
+
+    // Inicjalizuj sekcję aktualności
+    initNewsSection();
 
     // Pobierz wersję launchera
     await loadLauncherVersion();
@@ -1114,6 +1125,160 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ============================================
+// AKTUALNOŚCI (NEWS)
+// ============================================
+
+/**
+ * Ładuje aktualności z serwera
+ */
+async function loadNews() {
+    try {
+        const response = await api.getNews({ limit: 5 });
+
+        if (response.success && response.data) {
+            displayNews(response.data);
+        }
+    } catch (error) {
+        console.warn('Błąd ładowania aktualności:', error);
+        // Ukryj sekcję aktualności jeśli błąd
+        if (elements.newsSection) {
+            elements.newsSection.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * Inicjalizuje sekcję aktualności
+ */
+function initNewsSection() {
+    // Toggle zwijania/rozwijania
+    elements.newsToggle?.addEventListener('click', () => {
+        elements.newsSection?.classList.toggle('collapsed');
+    });
+}
+
+/**
+ * Wyświetla aktualności
+ */
+function displayNews(newsList) {
+    if (!elements.newsContainer) return;
+
+    if (!newsList || newsList.length === 0) {
+        elements.newsSection.style.display = 'none';
+        return;
+    }
+
+    elements.newsSection.style.display = 'block';
+
+    const typeLabels = {
+        news: 'Wiadomość',
+        update: 'Aktualizacja',
+        event: 'Wydarzenie',
+        maintenance: 'Konserwacja',
+        announcement: 'Ogłoszenie'
+    };
+
+    elements.newsContainer.innerHTML = newsList.map(item => `
+        <div class="news-item ${item.is_pinned ? 'pinned' : ''}" data-news-id="${item.id}">
+            <div class="news-item-header">
+                <span class="news-type ${item.type}">${typeLabels[item.type] || item.type}</span>
+                ${item.is_pinned ? `
+                    <svg class="news-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                        <path d="M12 2v20M2 12h20"/>
+                    </svg>
+                ` : ''}
+            </div>
+            <h4 class="news-item-title">${escapeHtml(item.title)}</h4>
+            <p class="news-item-summary">${escapeHtml(item.summary || '')}</p>
+            <div class="news-item-footer">
+                <span class="news-item-date">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 6v6l4 2"/>
+                    </svg>
+                    ${formatNewsDate(item.published_at)}
+                </span>
+                ${item.tags && item.tags.length > 0 ? `
+                    <div class="news-item-tags">
+                        ${item.tags.slice(0, 2).map(tag => `<span class="news-tag">${escapeHtml(tag)}</span>`).join('')}
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `).join('');
+
+    // Dodaj event listenery do kliknięcia
+    elements.newsContainer.querySelectorAll('.news-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const newsId = item.dataset.newsId;
+            showNewsDetails(newsId);
+        });
+    });
+}
+
+/**
+ * Formatuje datę aktualności
+ */
+function formatNewsDate(dateStr) {
+    if (!dateStr) return '';
+
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffMins < 60) {
+        return `${diffMins} min temu`;
+    } else if (diffHours < 24) {
+        return `${diffHours} godz. temu`;
+    } else if (diffDays < 7) {
+        return `${diffDays} dni temu`;
+    } else {
+        return date.toLocaleDateString('pl-PL');
+    }
+}
+
+/**
+ * Wyświetla szczegóły aktualności
+ */
+async function showNewsDetails(newsId) {
+    try {
+        const response = await api.getNewsDetails(newsId);
+
+        if (response.success && response.data) {
+            const news = response.data;
+
+            const typeLabels = {
+                news: 'Wiadomość',
+                update: 'Aktualizacja',
+                event: 'Wydarzenie',
+                maintenance: 'Konserwacja',
+                announcement: 'Ogłoszenie'
+            };
+
+            // Prosta konwersja markdown
+            let content = escapeHtml(news.content);
+            content = content.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+            content = content.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+            content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            content = content.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+            content = content.replace(/^- (.+)$/gm, '<li>$1</li>');
+            content = content.replace(/\n\n/g, '</p><p>');
+            content = '<p>' + content + '</p>';
+
+            showToast(`Czytasz: ${news.title}`, 'info');
+
+            // Można też pokazać modal z pełną treścią
+            // Na razie pokazujemy toast - można rozbudować o modal
+        }
+    } catch (error) {
+        console.error('Błąd ładowania szczegółów aktualności:', error);
+    }
 }
 
 // ============================================

@@ -3,7 +3,7 @@
  * Endpointy używane przez klienta launchera
  */
 import { Router } from 'express';
-import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog, ServerRules } from '../models/index.js';
+import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog, ServerRules, News } from '../models/index.js';
 import { authenticateUser, optionalAuth } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getClientIp } from '../utils/helpers.js';
@@ -405,5 +405,77 @@ router.post('/rules/accept',
         });
     })
 );
+
+// ============================================
+// AKTUALNOŚCI (NEWS)
+// ============================================
+
+/**
+ * GET /api/launcher/news
+ * Pobiera opublikowane wiadomości
+ */
+router.get('/news', asyncHandler(async (req, res) => {
+    const options = {
+        limit: Math.min(parseInt(req.query.limit) || 10, 50),
+        offset: parseInt(req.query.offset) || 0,
+        type: req.query.type || null,
+        tag: req.query.tag || null
+    };
+
+    const news = News.getPublished(options);
+
+    res.json({
+        success: true,
+        data: news
+    });
+}));
+
+/**
+ * GET /api/launcher/news/types
+ * Pobiera dostępne typy wiadomości
+ */
+router.get('/news/types', asyncHandler(async (req, res) => {
+    res.json({
+        success: true,
+        data: News.getTypes()
+    });
+}));
+
+/**
+ * GET /api/launcher/news/tags
+ * Pobiera popularne tagi
+ */
+router.get('/news/tags', asyncHandler(async (req, res) => {
+    const tags = News.getAllTags();
+
+    res.json({
+        success: true,
+        data: tags
+    });
+}));
+
+/**
+ * GET /api/launcher/news/:id
+ * Pobiera szczegóły wiadomości
+ */
+router.get('/news/:id', asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id);
+    const news = News.getById(id);
+
+    if (!news || !news.is_published) {
+        return res.status(404).json({
+            success: false,
+            error: 'Wiadomość nie znaleziona'
+        });
+    }
+
+    // Zwiększ licznik wyświetleń
+    News.incrementViews(id);
+
+    res.json({
+        success: true,
+        data: news
+    });
+}));
 
 export default router;

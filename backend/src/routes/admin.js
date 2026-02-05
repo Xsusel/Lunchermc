@@ -9,7 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import {
-    User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion, PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules
+    User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion, PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules, News
 } from '../models/index.js';
 import { authenticateAdmin, generateAdminToken, adminLimiter, authLimiter, rateLimitAdmin } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -2855,6 +2855,381 @@ router.get('/rules/user/:userId/history',
         res.json({
             success: true,
             data: history
+        });
+    })
+);
+
+// ============================================
+// AKTUALNOŚCI (NEWS)
+// ============================================
+
+/**
+ * GET /api/admin/news
+ * Lista wszystkich wiadomości
+ */
+router.get('/news',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const options = {
+            limit: parseInt(req.query.limit) || 50,
+            offset: parseInt(req.query.offset) || 0,
+            type: req.query.type || null,
+            publishedOnly: req.query.publishedOnly === 'true'
+        };
+
+        const result = News.getAll(options);
+
+        res.json({
+            success: true,
+            data: result.news,
+            pagination: {
+                total: result.total,
+                page: result.page,
+                pages: result.pages
+            }
+        });
+    })
+);
+
+/**
+ * GET /api/admin/news/stats
+ * Statystyki wiadomości
+ */
+router.get('/news/stats',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const stats = News.getStats();
+
+        res.json({
+            success: true,
+            data: stats
+        });
+    })
+);
+
+/**
+ * GET /api/admin/news/types
+ * Dostępne typy wiadomości
+ */
+router.get('/news/types',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        res.json({
+            success: true,
+            data: News.getTypes()
+        });
+    })
+);
+
+/**
+ * GET /api/admin/news/search
+ * Wyszukiwanie wiadomości
+ */
+router.get('/news/search',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const { q } = req.query;
+        if (!q || q.length < 2) {
+            return res.status(400).json({
+                success: false,
+                error: 'Fraza musi mieć minimum 2 znaki'
+            });
+        }
+
+        const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+        const results = News.search(q, { limit, publishedOnly: false });
+
+        res.json({
+            success: true,
+            data: results
+        });
+    })
+);
+
+/**
+ * GET /api/admin/news/:id
+ * Szczegóły wiadomości
+ */
+router.get('/news/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const news = News.getById(id);
+
+        if (!news) {
+            return res.status(404).json({
+                success: false,
+                error: 'Wiadomość nie znaleziona'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: news
+        });
+    })
+);
+
+/**
+ * POST /api/admin/news
+ * Tworzy nową wiadomość
+ */
+router.post('/news',
+    authenticateAdmin,
+    [
+        body('title').trim().notEmpty().withMessage('Tytuł jest wymagany'),
+        body('content').trim().notEmpty().withMessage('Treść jest wymagana'),
+        body('type').optional().isIn(['news', 'update', 'event', 'maintenance', 'announcement'])
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const { title, content, summary, type, imageUrl, isPinned, tags } = req.body;
+
+        const news = News.create({
+            title,
+            content,
+            summary,
+            type: type || 'news',
+            imageUrl,
+            isPinned: isPinned || false,
+            tags: tags || [],
+            createdBy: req.admin.id
+        });
+
+        ActivityLog.logAdminAction('news_create', {
+            newsId: news.id,
+            title
+        }, getClientIp(req));
+
+        res.status(201).json({
+            success: true,
+            message: 'Wiadomość została utworzona',
+            data: news
+        });
+    })
+);
+
+/**
+ * PUT /api/admin/news/:id
+ * Aktualizuje wiadomość
+ */
+router.put('/news/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const existing = News.getById(id);
+
+        if (!existing) {
+            return res.status(404).json({
+                success: false,
+                error: 'Wiadomość nie znaleziona'
+            });
+        }
+
+        const { title, content, summary, type, imageUrl, isPinned, tags } = req.body;
+        const updated = News.update(id, { title, content, summary, type, imageUrl, isPinned, tags });
+
+        ActivityLog.logAdminAction('news_update', {
+            newsId: id
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: 'Wiadomość została zaktualizowana',
+            data: updated
+        });
+    })
+);
+
+/**
+ * POST /api/admin/news/:id/publish
+ * Publikuje wiadomość
+ */
+router.post('/news/:id/publish',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const news = News.publish(id);
+
+        if (!news) {
+            return res.status(404).json({
+                success: false,
+                error: 'Wiadomość nie znaleziona'
+            });
+        }
+
+        ActivityLog.logAdminAction('news_publish', {
+            newsId: id,
+            title: news.title
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: 'Wiadomość została opublikowana',
+            data: news
+        });
+    })
+);
+
+/**
+ * POST /api/admin/news/:id/unpublish
+ * Wycofuje publikację
+ */
+router.post('/news/:id/unpublish',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const news = News.unpublish(id);
+
+        if (!news) {
+            return res.status(404).json({
+                success: false,
+                error: 'Wiadomość nie znaleziona'
+            });
+        }
+
+        ActivityLog.logAdminAction('news_unpublish', {
+            newsId: id
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: 'Publikacja została wycofana',
+            data: news
+        });
+    })
+);
+
+/**
+ * POST /api/admin/news/:id/pin
+ * Przypina/odpina wiadomość
+ */
+router.post('/news/:id/pin',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const news = News.togglePin(id);
+
+        if (!news) {
+            return res.status(404).json({
+                success: false,
+                error: 'Wiadomość nie znaleziona'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: news.is_pinned ? 'Wiadomość przypięta' : 'Wiadomość odpięta',
+            data: news
+        });
+    })
+);
+
+/**
+ * DELETE /api/admin/news/:id
+ * Usuwa wiadomość
+ */
+router.delete('/news/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const deleted = News.delete(id);
+
+        if (!deleted) {
+            return res.status(404).json({
+                success: false,
+                error: 'Wiadomość nie znaleziona'
+            });
+        }
+
+        ActivityLog.logAdminAction('news_delete', {
+            newsId: id,
+            title: deleted.title
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: 'Wiadomość została usunięta'
         });
     })
 );
