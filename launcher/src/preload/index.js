@@ -124,7 +124,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getChangelog: () => ipcRenderer.invoke('get-changelog'),
     getChangelogVersion: (version) => ipcRenderer.invoke('get-changelog-version', version),
     shouldShowChangelog: () => ipcRenderer.invoke('should-show-changelog'),
-    markChangelogSeen: () => ipcRenderer.invoke('mark-changelog-seen')
+    markChangelogSeen: () => ipcRenderer.invoke('mark-changelog-seen'),
+
+    // ============================================
+    // MOTYWY
+    // ============================================
+    themes: {
+        getAvailable: () => ipcRenderer.invoke('get-available-themes'),
+        getTheme: (themeId) => ipcRenderer.invoke('get-theme', themeId),
+        getVariables: (themeId) => ipcRenderer.invoke('get-theme-variables', themeId),
+        getCurrent: () => ipcRenderer.invoke('get-current-theme'),
+        setTheme: (themeId) => ipcRenderer.invoke('set-theme', themeId)
+    }
 });
 
 // Informacja o załadowaniu

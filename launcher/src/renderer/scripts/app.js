@@ -12,7 +12,8 @@ const state = {
     config: null,
     isLoggedIn: false,
     isLoading: false,
-    serverOnline: true
+    serverOnline: true,
+    currentTheme: 'dark'
 };
 
 // ============================================
@@ -68,6 +69,7 @@ const elements = {
     closeOnLaunch: document.getElementById('close-on-launch'),
     autoUpdate: document.getElementById('auto-update'),
     gamePath: document.getElementById('game-path'),
+    themeSelect: document.getElementById('theme-select'),
     btnGameBrowse: document.getElementById('btn-game-browse'),
     btnOpenFolder: document.getElementById('btn-open-folder'),
     btnResetSettings: document.getElementById('btn-reset-settings'),
@@ -111,6 +113,9 @@ const elements = {
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('XsusLauncher inicjalizacja...');
 
+    // Załaduj zapisany motyw przed inicjalizacją UI
+    await initTheme();
+
     // Inicjalizuj przyciski okna
     initWindowControls();
 
@@ -140,6 +145,66 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     console.log('XsusLauncher gotowy!');
 });
+
+// ============================================
+// MOTYWY
+// ============================================
+
+/**
+ * Inicjalizuje system motywów
+ */
+async function initTheme() {
+    try {
+        const themeData = await window.electronAPI?.themes?.getCurrent();
+        if (themeData && themeData.variables) {
+            applyThemeVariables(themeData.variables);
+            state.currentTheme = themeData.id;
+        }
+    } catch (e) {
+        console.warn('Nie udało się załadować motywu:', e);
+    }
+}
+
+/**
+ * Aplikuje zmienne CSS motywu
+ */
+function applyThemeVariables(variables) {
+    const root = document.documentElement;
+    for (const [key, value] of Object.entries(variables)) {
+        root.style.setProperty(key, value);
+    }
+}
+
+/**
+ * Zmienia motyw
+ */
+async function changeTheme(themeId) {
+    try {
+        const result = await window.electronAPI?.themes?.setTheme(themeId);
+        if (result && result.success) {
+            applyThemeVariables(result.variables);
+            state.currentTheme = themeId;
+            showToast('Motyw zmieniony', 'success');
+            return true;
+        }
+    } catch (e) {
+        console.error('Błąd zmiany motywu:', e);
+        showToast('Błąd zmiany motywu', 'error');
+    }
+    return false;
+}
+
+/**
+ * Pobiera listę dostępnych motywów
+ */
+async function getAvailableThemes() {
+    try {
+        return await window.electronAPI?.themes?.getAvailable() || [];
+    } catch (e) {
+        console.error('Błąd pobierania motywów:', e);
+        return [];
+    }
+}
 
 // ============================================
 // KONTROLKI OKNA
@@ -754,6 +819,44 @@ async function initSettings() {
 
     elements.btnResetSettings?.addEventListener('click', resetSettings);
     elements.btnSaveSettings?.addEventListener('click', saveSettings);
+
+    // Inicjalizuj selektor motywów
+    await initThemeSelector();
+}
+
+/**
+ * Inicjalizuje selektor motywów
+ */
+async function initThemeSelector() {
+    if (!elements.themeSelect) return;
+
+    try {
+        // Pobierz dostępne motywy
+        const themes = await getAvailableThemes();
+
+        // Wyczyść i wypełnij select
+        elements.themeSelect.innerHTML = '';
+
+        for (const theme of themes) {
+            const option = document.createElement('option');
+            option.value = theme.id;
+            option.textContent = theme.name;
+            option.title = theme.description;
+            elements.themeSelect.appendChild(option);
+        }
+
+        // Ustaw aktualny motyw
+        elements.themeSelect.value = state.currentTheme;
+
+        // Listener dla zmiany motywu
+        elements.themeSelect.addEventListener('change', async (e) => {
+            const themeId = e.target.value;
+            await changeTheme(themeId);
+        });
+
+    } catch (e) {
+        console.error('Błąd inicjalizacji selektora motywów:', e);
+    }
 }
 
 async function getSettings() {

@@ -8,6 +8,7 @@ const Store = require('electron-store');
 const GameManager = require('./gameManager');
 const discordRPC = require('./discordRPC');
 const { getChangelog, getLatestChangelog } = require('./changelog');
+const { getAvailableThemes, getTheme, getThemeVariables } = require('./themes');
 
 // Auto-updater (opcjonalny)
 let autoUpdater;
@@ -386,6 +387,49 @@ ipcMain.handle('mark-changelog-seen', () => {
     const currentVersion = app.getVersion();
     store.set('lastSeenVersion', currentVersion);
     return { success: true };
+});
+
+// ============================================
+// MOTYWY
+// ============================================
+
+// Pobierz listę dostępnych motywów
+ipcMain.handle('get-available-themes', () => {
+    return getAvailableThemes();
+});
+
+// Pobierz szczegóły motywu
+ipcMain.handle('get-theme', (event, themeId) => {
+    return getTheme(themeId);
+});
+
+// Pobierz zmienne CSS motywu
+ipcMain.handle('get-theme-variables', (event, themeId) => {
+    return getThemeVariables(themeId);
+});
+
+// Pobierz aktualny motyw
+ipcMain.handle('get-current-theme', () => {
+    const themeId = store.get('theme', 'dark');
+    return {
+        id: themeId,
+        ...getTheme(themeId),
+        variables: getThemeVariables(themeId)
+    };
+});
+
+// Ustaw motyw
+ipcMain.handle('set-theme', (event, themeId) => {
+    const theme = getTheme(themeId);
+    if (theme) {
+        store.set('theme', themeId);
+        return {
+            success: true,
+            id: themeId,
+            variables: getThemeVariables(themeId)
+        };
+    }
+    return { success: false, error: 'Theme not found' };
 });
 
 // Eksportuj discordRPC dla GameManager
