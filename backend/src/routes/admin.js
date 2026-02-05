@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import {
     User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion, PlayerStats, ScheduledMaintenance, Session, Ban
 } from '../models/index.js';
-import { authenticateAdmin, generateAdminToken, adminLimiter, authLimiter } from '../middleware/index.js';
+import { authenticateAdmin, generateAdminToken, adminLimiter, authLimiter, rateLimitAdmin } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import {
     calculateSHA256, sanitizeFilename, isAllowedModFile,
