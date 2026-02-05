@@ -3,7 +3,7 @@
  * Endpointy używane przez klienta launchera
  */
 import { Router } from 'express';
-import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog } from '../models/index.js';
+import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog, ServerRules } from '../models/index.js';
 import { authenticateUser, optionalAuth } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getClientIp } from '../utils/helpers.js';
@@ -308,6 +308,100 @@ router.post('/verify-files',
         res.json({
             success: true,
             data: result
+        });
+    })
+);
+
+// ============================================
+// REGULAMIN SERWERA
+// ============================================
+
+/**
+ * GET /api/launcher/rules
+ * Pobiera aktywny regulamin serwera
+ */
+router.get('/rules', asyncHandler(async (req, res) => {
+    const rules = ServerRules.getActive();
+
+    if (!rules) {
+        return res.json({
+            success: true,
+            data: null,
+            message: 'Brak aktywnego regulaminu'
+        });
+    }
+
+    res.json({
+        success: true,
+        data: {
+            id: rules.id,
+            version: rules.version,
+            title: rules.title,
+            content: rules.content,
+            requiresAcceptance: !!rules.requires_acceptance,
+            activatedAt: rules.activated_at
+        }
+    });
+}));
+
+/**
+ * GET /api/launcher/rules/check
+ * Sprawdza czy użytkownik zaakceptował aktywny regulamin
+ */
+router.get('/rules/check',
+    authenticateUser,
+    asyncHandler(async (req, res) => {
+        const result = ServerRules.hasUserAccepted(req.userId);
+
+        res.json({
+            success: true,
+            data: {
+                accepted: result.accepted,
+                rules: result.rules ? {
+                    id: result.rules.id,
+                    version: result.rules.version,
+                    title: result.rules.title,
+                    content: result.rules.content,
+                    requiresAcceptance: !!result.rules.requires_acceptance
+                } : null,
+                acceptedAt: result.acceptance?.accepted_at || null
+            }
+        });
+    })
+);
+
+/**
+ * POST /api/launcher/rules/accept
+ * Akceptuje aktywny regulamin
+ */
+router.post('/rules/accept',
+    authenticateUser,
+    asyncHandler(async (req, res) => {
+        const activeRules = ServerRules.getActive();
+
+        if (!activeRules) {
+            return res.status(400).json({
+                success: false,
+                error: 'Brak aktywnego regulaminu do zaakceptowania'
+            });
+        }
+
+        const clientIp = getClientIp(req);
+        const acceptance = ServerRules.acceptByUser(req.userId, activeRules.id, clientIp);
+
+        // Loguj akceptację
+        ActivityLog.log({
+            action: 'rules_accepted',
+            category: 'user',
+            userId: req.userId,
+            details: `Zaakceptowano regulamin v${activeRules.version}`,
+            ipAddress: clientIp
+        });
+
+        res.json({
+            success: true,
+            message: 'Regulamin został zaakceptowany',
+            data: acceptance
         });
     })
 );

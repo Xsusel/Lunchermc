@@ -9,7 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import {
-    User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion, PlayerStats, ScheduledMaintenance, Session, Ban
+    User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion, PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules
 } from '../models/index.js';
 import { authenticateAdmin, generateAdminToken, adminLimiter, authLimiter, rateLimitAdmin } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -2491,6 +2491,371 @@ router.post('/bans/appeals/:id/review',
                 error: error.message
             });
         }
+    })
+);
+
+// ============================================
+// REGULAMIN SERWERA
+// ============================================
+
+/**
+ * GET /api/admin/rules
+ * Lista wszystkich wersji regulaminu
+ */
+router.get('/rules',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const rules = ServerRules.getAll();
+
+        res.json({
+            success: true,
+            data: rules
+        });
+    })
+);
+
+/**
+ * GET /api/admin/rules/active
+ * Pobiera aktywny regulamin
+ */
+router.get('/rules/active',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const rules = ServerRules.getActive();
+
+        res.json({
+            success: true,
+            data: rules || null
+        });
+    })
+);
+
+/**
+ * GET /api/admin/rules/stats
+ * Statystyki akceptacji regulaminu
+ */
+router.get('/rules/stats',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const rulesId = req.query.rulesId ? parseInt(req.query.rulesId) : null;
+        const stats = ServerRules.getAcceptanceStats(rulesId);
+
+        res.json({
+            success: true,
+            data: stats
+        });
+    })
+);
+
+/**
+ * GET /api/admin/rules/:id
+ * Szczegóły regulaminu
+ */
+router.get('/rules/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const rules = ServerRules.getById(id);
+
+        if (!rules) {
+            return res.status(404).json({
+                success: false,
+                error: 'Regulamin nie znaleziony'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: rules
+        });
+    })
+);
+
+/**
+ * GET /api/admin/rules/:id/acceptances
+ * Lista akceptacji dla danego regulaminu
+ */
+router.get('/rules/:id/acceptances',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const limit = parseInt(req.query.limit) || 100;
+        const offset = parseInt(req.query.offset) || 0;
+
+        const acceptances = ServerRules.getAcceptances(id, { limit, offset });
+
+        res.json({
+            success: true,
+            data: acceptances
+        });
+    })
+);
+
+/**
+ * POST /api/admin/rules
+ * Tworzy nowy regulamin
+ */
+router.post('/rules',
+    authenticateAdmin,
+    [
+        body('version').trim().notEmpty().withMessage('Wersja jest wymagana'),
+        body('content').trim().notEmpty().withMessage('Treść regulaminu jest wymagana'),
+        body('title').optional().trim(),
+        body('requiresAcceptance').optional().isBoolean()
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const { version, title, content, requiresAcceptance } = req.body;
+
+        const rules = ServerRules.create({
+            version,
+            title,
+            content,
+            requiresAcceptance: requiresAcceptance !== false,
+            createdBy: req.admin.id
+        });
+
+        ActivityLog.logAdminAction('rules_create', {
+            rulesId: rules.id,
+            version
+        }, getClientIp(req));
+
+        res.status(201).json({
+            success: true,
+            message: 'Regulamin został utworzony',
+            data: rules
+        });
+    })
+);
+
+/**
+ * PUT /api/admin/rules/:id
+ * Aktualizuje regulamin
+ */
+router.put('/rules/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const rules = ServerRules.getById(id);
+
+        if (!rules) {
+            return res.status(404).json({
+                success: false,
+                error: 'Regulamin nie znaleziony'
+            });
+        }
+
+        const { version, title, content, requiresAcceptance } = req.body;
+        const updated = ServerRules.update(id, { version, title, content, requiresAcceptance });
+
+        ActivityLog.logAdminAction('rules_update', {
+            rulesId: id
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: 'Regulamin został zaktualizowany',
+            data: updated
+        });
+    })
+);
+
+/**
+ * POST /api/admin/rules/:id/activate
+ * Aktywuje regulamin
+ */
+router.post('/rules/:id/activate',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const rules = ServerRules.activate(id);
+
+        if (!rules) {
+            return res.status(404).json({
+                success: false,
+                error: 'Regulamin nie znaleziony'
+            });
+        }
+
+        ActivityLog.logAdminAction('rules_activate', {
+            rulesId: id,
+            version: rules.version
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: 'Regulamin został aktywowany',
+            data: rules
+        });
+    })
+);
+
+/**
+ * POST /api/admin/rules/:id/reset-acceptances
+ * Resetuje akceptacje dla danego regulaminu
+ */
+router.post('/rules/:id/reset-acceptances',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const result = ServerRules.resetAcceptances(id);
+
+        ActivityLog.logAdminAction('rules_reset_acceptances', {
+            rulesId: id,
+            deleted: result.deleted
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: `Zresetowano ${result.deleted} akceptacji`,
+            data: result
+        });
+    })
+);
+
+/**
+ * DELETE /api/admin/rules/:id
+ * Usuwa regulamin
+ */
+router.delete('/rules/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+
+        try {
+            const deleted = ServerRules.delete(id);
+
+            if (!deleted) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Regulamin nie znaleziony'
+                });
+            }
+
+            ActivityLog.logAdminAction('rules_delete', {
+                rulesId: id,
+                version: deleted.version
+            }, getClientIp(req));
+
+            res.json({
+                success: true,
+                message: 'Regulamin został usunięty'
+            });
+        } catch (error) {
+            res.status(400).json({
+                success: false,
+                error: error.message
+            });
+        }
+    })
+);
+
+/**
+ * GET /api/admin/rules/user/:userId/history
+ * Historia akceptacji regulaminów przez użytkownika
+ */
+router.get('/rules/user/:userId/history',
+    authenticateAdmin,
+    [
+        param('userId').isInt().withMessage('userId musi być liczbą')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const userId = parseInt(req.params.userId);
+        const history = ServerRules.getUserAcceptanceHistory(userId);
+
+        res.json({
+            success: true,
+            data: history
+        });
     })
 );
 

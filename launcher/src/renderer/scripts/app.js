@@ -13,7 +13,9 @@ const state = {
     isLoggedIn: false,
     isLoading: false,
     serverOnline: true,
-    currentTheme: 'dark'
+    currentTheme: 'dark',
+    rulesAccepted: false,
+    pendingRules: null
 };
 
 // ============================================
@@ -102,6 +104,16 @@ const elements = {
     changelogVersion: document.getElementById('changelog-version'),
     changelogContent: document.getElementById('changelog-content'),
     btnChangelogClose: document.getElementById('btn-changelog-close'),
+
+    // Rules modal
+    rulesModal: document.getElementById('rules-modal'),
+    rulesModalClose: document.getElementById('rules-modal-close'),
+    rulesTitle: document.getElementById('rules-title'),
+    rulesVersion: document.getElementById('rules-version'),
+    rulesContent: document.getElementById('rules-content'),
+    rulesAcceptCheckbox: document.getElementById('rules-accept-checkbox'),
+    btnRulesAccept: document.getElementById('btn-rules-accept'),
+    btnRulesDecline: document.getElementById('btn-rules-decline'),
 
     // Toast
     toastContainer: document.getElementById('toast-container')
@@ -296,6 +308,23 @@ function initModals() {
         if (e.target === elements.changelogModal) closeModal('changelog');
     });
 
+    // Rules modal
+    elements.rulesModalClose?.addEventListener('click', () => closeModal('rules'));
+    elements.btnRulesDecline?.addEventListener('click', () => closeModal('rules'));
+    elements.rulesModal?.addEventListener('click', (e) => {
+        if (e.target === elements.rulesModal) closeModal('rules');
+    });
+
+    // Checkbox akceptacji
+    elements.rulesAcceptCheckbox?.addEventListener('change', (e) => {
+        if (elements.btnRulesAccept) {
+            elements.btnRulesAccept.disabled = !e.target.checked;
+        }
+    });
+
+    // Przycisk akceptacji
+    elements.btnRulesAccept?.addEventListener('click', handleRulesAccept);
+
     // Formularze
     elements.loginForm?.addEventListener('submit', handleLogin);
     elements.registerForm?.addEventListener('submit', handleRegister);
@@ -306,6 +335,7 @@ function openModal(name) {
     if (name === 'login') modal = elements.loginModal;
     else if (name === 'register') modal = elements.registerModal;
     else if (name === 'changelog') modal = elements.changelogModal;
+    else if (name === 'rules') modal = elements.rulesModal;
 
     modal?.classList.add('active');
 }
@@ -315,6 +345,7 @@ function closeModal(name) {
     if (name === 'login') modal = elements.loginModal;
     else if (name === 'register') modal = elements.registerModal;
     else if (name === 'changelog') modal = elements.changelogModal;
+    else if (name === 'rules') modal = elements.rulesModal;
 
     modal?.classList.remove('active');
 
@@ -328,6 +359,14 @@ function closeModal(name) {
     } else if (name === 'changelog') {
         // Oznacz changelog jako widziany przy zamknięciu
         window.electronAPI?.markChangelogSeen();
+    } else if (name === 'rules') {
+        // Reset checkboxa
+        if (elements.rulesAcceptCheckbox) {
+            elements.rulesAcceptCheckbox.checked = false;
+        }
+        if (elements.btnRulesAccept) {
+            elements.btnRulesAccept.disabled = true;
+        }
     }
 }
 
@@ -632,6 +671,13 @@ async function handlePlay() {
 
     if (!state.serverOnline) {
         showToast('Serwer jest w trybie konserwacji', 'warning');
+        return;
+    }
+
+    // Sprawdź czy użytkownik zaakceptował regulamin
+    const rulesCheck = await checkRules();
+    if (rulesCheck.needsAcceptance) {
+        showRulesModal(rulesCheck.rules);
         return;
     }
 
@@ -1068,6 +1114,133 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ============================================
+// REGULAMIN SERWERA
+// ============================================
+
+/**
+ * Sprawdza czy użytkownik musi zaakceptować regulamin
+ * @returns {Promise<{needsAcceptance: boolean, rules: object|null}>}
+ */
+async function checkRules() {
+    if (!state.isLoggedIn || !state.token) {
+        return { needsAcceptance: false, rules: null };
+    }
+
+    try {
+        const response = await api.checkRulesAcceptance();
+
+        if (response.success && response.data) {
+            state.rulesAccepted = response.data.accepted;
+
+            if (!response.data.accepted && response.data.rules) {
+                state.pendingRules = response.data.rules;
+                return { needsAcceptance: true, rules: response.data.rules };
+            }
+        }
+
+        return { needsAcceptance: false, rules: null };
+    } catch (error) {
+        console.warn('Błąd sprawdzania regulaminu:', error);
+        // W przypadku błędu pozwalamy grać
+        return { needsAcceptance: false, rules: null };
+    }
+}
+
+/**
+ * Wyświetla modal z regulaminem
+ */
+function showRulesModal(rules) {
+    if (!rules) return;
+
+    // Ustaw tytuł
+    if (elements.rulesTitle) {
+        elements.rulesTitle.textContent = rules.title || 'Regulamin Serwera';
+    }
+
+    // Ustaw wersję
+    if (elements.rulesVersion) {
+        elements.rulesVersion.textContent = `Wersja: ${rules.version}`;
+    }
+
+    // Ustaw treść (konwertuj markdown na HTML jeśli potrzeba)
+    if (elements.rulesContent) {
+        // Prosta konwersja markdown - nagłówki i listy
+        let html = escapeHtml(rules.content);
+
+        // Nagłówki ## -> h3
+        html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+
+        // Pogrubienie **text**
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+        // Lista numerowana
+        html = html.replace(/^\d+\. (.+)$/gm, '<li class="numbered">$1</li>');
+
+        // Lista punktowana
+        html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+
+        // Nowe linie
+        html = html.replace(/\n\n/g, '</p><p>');
+        html = '<p>' + html + '</p>';
+
+        elements.rulesContent.innerHTML = html;
+    }
+
+    // Reset checkboxa i przycisku
+    if (elements.rulesAcceptCheckbox) {
+        elements.rulesAcceptCheckbox.checked = false;
+    }
+    if (elements.btnRulesAccept) {
+        elements.btnRulesAccept.disabled = true;
+    }
+
+    // Otwórz modal
+    openModal('rules');
+}
+
+/**
+ * Obsługuje akceptację regulaminu
+ */
+async function handleRulesAccept() {
+    if (!elements.rulesAcceptCheckbox?.checked) {
+        showToast('Musisz zaznaczyć akceptację regulaminu', 'warning');
+        return;
+    }
+
+    // Disable button during request
+    if (elements.btnRulesAccept) {
+        elements.btnRulesAccept.disabled = true;
+        elements.btnRulesAccept.textContent = 'Akceptowanie...';
+    }
+
+    try {
+        const response = await api.acceptRules();
+
+        if (response.success) {
+            state.rulesAccepted = true;
+            state.pendingRules = null;
+
+            closeModal('rules');
+            showToast('Regulamin zaakceptowany!', 'success');
+
+            // Uruchom grę po akceptacji
+            handlePlay();
+        } else {
+            showToast(response.error || 'Błąd akceptacji regulaminu', 'error');
+        }
+    } catch (error) {
+        console.error('Błąd akceptacji regulaminu:', error);
+        showToast('Błąd akceptacji regulaminu', 'error');
+    } finally {
+        if (elements.btnRulesAccept) {
+            elements.btnRulesAccept.textContent = 'Akceptuję i chcę grać';
+            elements.btnRulesAccept.disabled = !elements.rulesAcceptCheckbox?.checked;
+        }
+    }
 }
 
 // Odświeżaj konfigurację co 5 minut

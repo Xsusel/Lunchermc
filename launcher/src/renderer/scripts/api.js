@@ -235,6 +235,33 @@ class ApiClient {
             forceRefresh
         });
     }
+
+    // ============================================
+    // REGULAMIN SERWERA
+    // ============================================
+
+    /**
+     * Pobiera aktywny regulamin serwera
+     */
+    async getServerRules() {
+        return this.request('/launcher/rules');
+    }
+
+    /**
+     * Sprawdza czy użytkownik zaakceptował regulamin
+     */
+    async checkRulesAcceptance() {
+        return this.request('/launcher/rules/check');
+    }
+
+    /**
+     * Akceptuje regulamin serwera
+     */
+    async acceptRules() {
+        return this.request('/launcher/rules/accept', {
+            method: 'POST'
+        });
+    }
 }
 
 // Eksportujemy instancję
