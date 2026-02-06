@@ -115,7 +115,7 @@ public class MenuEventHandler {
         ServerData serverData = new ServerData(
             XsusMenuMod.SERVER_NAME,
             serverAddress,
-            ServerData.Type.OTHER
+            false
         );
 
         // Polacz z serwerem
