@@ -113,9 +113,9 @@ public class MenuEventHandler {
 
         // Utworz dane serwera - POPRAWIONE DLA 1.20.1
         ServerData serverData = new ServerData(
-                XsusMenuMod.SERVER_NAME,
-                serverAddress,
-                false // <--- ZMIANA TUTAJ: false zamiast ServerData.Type.OTHER
+            XsusMenuMod.SERVER_NAME,
+            serverAddress,
+            false
         );
 
         // Polacz z serwerem
