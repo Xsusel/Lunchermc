@@ -41,11 +41,11 @@ public class MenuEventHandler {
 
                 // Usun przyciski Singleplayer, Multiplayer, Realms
                 if (buttonText.contains("singleplayer") ||
-                    buttonText.contains("pojedynczy") ||
-                    buttonText.contains("multiplayer") ||
-                    buttonText.contains("wieloosobowy") ||
-                    buttonText.contains("realms") ||
-                    buttonText.contains("minecraft realms")) {
+                        buttonText.contains("pojedynczy") ||
+                        buttonText.contains("multiplayer") ||
+                        buttonText.contains("wieloosobowy") ||
+                        buttonText.contains("realms") ||
+                        buttonText.contains("minecraft realms")) {
                     buttonsToRemove.add(button);
                 }
             }
@@ -65,16 +65,16 @@ public class MenuEventHandler {
         String buttonText = "\u25B6 Graj na " + XsusMenuMod.SERVER_NAME;
 
         Button connectButton = Button.builder(
-            Component.literal(buttonText),
-            btn -> connectToServer()
-        )
-        .bounds(centerX - buttonWidth / 2, buttonY, buttonWidth, buttonHeight)
-        .build();
+                        Component.literal(buttonText),
+                        btn -> connectToServer()
+                )
+                .bounds(centerX - buttonWidth / 2, buttonY, buttonWidth, buttonHeight)
+                .build();
 
         event.addListener(connectButton);
 
         XsusMenuMod.LOGGER.info("XsusMenuMod: Menu zmodyfikowane pomyslnie! Serwer: {}:{}",
-            XsusMenuMod.SERVER_IP, XsusMenuMod.SERVER_PORT);
+                XsusMenuMod.SERVER_IP, XsusMenuMod.SERVER_PORT);
     }
 
     @SubscribeEvent
@@ -93,11 +93,11 @@ public class MenuEventHandler {
         int infoY = screen.height / 4 + 48 + 24;
 
         guiGraphics.drawCenteredString(
-            Minecraft.getInstance().font,
-            Component.literal("\u00A77" + serverInfo),
-            centerX,
-            infoY,
-            0xAAAAAA
+                Minecraft.getInstance().font,
+                Component.literal("\u00A77" + serverInfo),
+                centerX,
+                infoY,
+                0xAAAAAA
         );
     }
 
@@ -111,7 +111,7 @@ public class MenuEventHandler {
 
         XsusMenuMod.LOGGER.info("XsusMenuMod: Laczenie z serwerem: " + serverAddress);
 
-        // Utworz dane serwera
+        // Utworz dane serwera - POPRAWIONE DLA 1.20.1
         ServerData serverData = new ServerData(
             XsusMenuMod.SERVER_NAME,
             serverAddress,
