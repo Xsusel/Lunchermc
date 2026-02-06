@@ -1,11 +1,11 @@
 package pl.xsus.custommenu;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
-import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
@@ -16,7 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Handler zdarzeń ekranu - modyfikuje menu główne
+ * Handler zdarzen ekranu - modyfikuje menu glowne
  */
 @OnlyIn(Dist.CLIENT)
 public class MenuEventHandler {
@@ -25,21 +25,21 @@ public class MenuEventHandler {
     public void onScreenInit(ScreenEvent.Init.Post event) {
         Screen screen = event.getScreen();
 
-        // Tylko dla ekranu tytułowego (menu główne)
+        // Tylko dla ekranu tytulowego (menu glowne)
         if (!(screen instanceof TitleScreen)) {
             return;
         }
 
-        XsusMenuMod.LOGGER.info("XsusMenuMod: Modyfikowanie menu głównego...");
+        XsusMenuMod.LOGGER.info("XsusMenuMod: Modyfikowanie menu glownego...");
 
-        // Znajdź przyciski do usunięcia
+        // Znajdz przyciski do usuniecia
         List<Button> buttonsToRemove = new ArrayList<>();
 
         for (var widget : event.getListenersList()) {
             if (widget instanceof Button button) {
                 String buttonText = button.getMessage().getString().toLowerCase();
 
-                // Usuń przyciski Singleplayer, Multiplayer, Realms
+                // Usun przyciski Singleplayer, Multiplayer, Realms
                 if (buttonText.contains("singleplayer") ||
                     buttonText.contains("pojedynczy") ||
                     buttonText.contains("multiplayer") ||
@@ -51,48 +51,74 @@ public class MenuEventHandler {
             }
         }
 
-        // Usuń znalezione przyciski
+        // Usun znalezione przyciski
         for (Button button : buttonsToRemove) {
             event.removeListener(button);
         }
 
-        // Dodaj przycisk "Połącz z serwerem"
+        // Dodaj przycisk "Graj na serwerze" - wiekszy i bardziej widoczny
         int centerX = screen.width / 2;
-        int buttonY = screen.height / 4 + 48; // Pozycja pierwszego przycisku
+        int buttonWidth = 240;
+        int buttonHeight = 20;
+        int buttonY = screen.height / 4 + 48;
 
-        String buttonText = "Połącz z " + XsusMenuMod.SERVER_NAME;
+        String buttonText = "\u25B6 Graj na " + XsusMenuMod.SERVER_NAME;
 
         Button connectButton = Button.builder(
             Component.literal(buttonText),
             btn -> connectToServer()
         )
-        .bounds(centerX - 100, buttonY, 200, 20)
+        .bounds(centerX - buttonWidth / 2, buttonY, buttonWidth, buttonHeight)
         .build();
 
         event.addListener(connectButton);
 
-        XsusMenuMod.LOGGER.info("XsusMenuMod: Menu zmodyfikowane pomyślnie! Serwer: {}:{}",
+        XsusMenuMod.LOGGER.info("XsusMenuMod: Menu zmodyfikowane pomyslnie! Serwer: {}:{}",
             XsusMenuMod.SERVER_IP, XsusMenuMod.SERVER_PORT);
     }
 
+    @SubscribeEvent
+    public void onScreenRender(ScreenEvent.Render.Post event) {
+        Screen screen = event.getScreen();
+
+        if (!(screen instanceof TitleScreen)) {
+            return;
+        }
+
+        GuiGraphics guiGraphics = event.getGuiGraphics();
+        int centerX = screen.width / 2;
+
+        // Rysuj informacje o serwerze pod przyciskiem
+        String serverInfo = XsusMenuMod.SERVER_IP + ":" + XsusMenuMod.SERVER_PORT;
+        int infoY = screen.height / 4 + 48 + 24;
+
+        guiGraphics.drawCenteredString(
+            Minecraft.getInstance().font,
+            Component.literal("\u00A77" + serverInfo),
+            centerX,
+            infoY,
+            0xAAAAAA
+        );
+    }
+
     /**
-     * Łączy z serwerem (IP pobrane z konfiguracji panelu)
+     * Laczy z serwerem (IP pobrane z konfiguracji panelu)
      */
     private void connectToServer() {
         Minecraft mc = Minecraft.getInstance();
 
         String serverAddress = XsusMenuMod.SERVER_IP + ":" + XsusMenuMod.SERVER_PORT;
 
-        XsusMenuMod.LOGGER.info("XsusMenuMod: Łączenie z serwerem: " + serverAddress);
+        XsusMenuMod.LOGGER.info("XsusMenuMod: Laczenie z serwerem: " + serverAddress);
 
-        // Utwórz dane serwera
+        // Utworz dane serwera
         ServerData serverData = new ServerData(
             XsusMenuMod.SERVER_NAME,
             serverAddress,
             ServerData.Type.OTHER
         );
 
-        // Połącz z serwerem
+        // Polacz z serwerem
         ConnectToServerHelper.connect(mc, serverData);
     }
 }

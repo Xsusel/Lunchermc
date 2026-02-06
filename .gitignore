@@ -58,6 +58,10 @@ coverage/
 .parcel-cache/
 .eslintcache
 
+# Gradle
+.gradle/
+server-mod/run/
+
 # Misc
 *.pem
 *.key
