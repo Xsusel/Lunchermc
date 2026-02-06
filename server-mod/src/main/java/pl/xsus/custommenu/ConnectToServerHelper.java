@@ -28,8 +28,7 @@ public class ConnectToServerHelper {
                 mc,
                 serverAddress,
                 serverData,
-                false, // quickPlay
-                null   // cookie
+                false // quickPlay
             );
 
             XsusMenuMod.LOGGER.info("XsusMenuMod: Rozpoczęto łączenie z " + serverData.ip);
