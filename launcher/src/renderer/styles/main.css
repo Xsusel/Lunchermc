@@ -875,19 +875,26 @@ body {
 }
 
 .checkbox-label input {
-    display: none;
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
 }
 
 .checkmark {
+    display: inline-block;
     width: 20px;
     height: 20px;
     min-width: 20px;
+    min-height: 20px;
     flex-shrink: 0;
     background: var(--bg-tertiary);
     border: 2px solid var(--border);
     border-radius: 4px;
     position: relative;
     transition: var(--transition);
+    box-sizing: border-box;
 }
 
 .checkbox-label input:checked + .checkmark {
