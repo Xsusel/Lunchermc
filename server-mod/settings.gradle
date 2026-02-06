@@ -1,7 +1,10 @@
 pluginManagement {
     repositories {
+        maven {
+            url = 'https://maven.minecraftforge.net'
+            allowInsecureProtocol = false
+        }
         gradlePluginPortal()
-        maven { url = 'https://maven.minecraftforge.net' }
     }
 }
 

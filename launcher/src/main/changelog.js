@@ -15,8 +15,7 @@ const changelog = {
                 'Wbudowany system logowania',
                 'Auto-connect do serwera po uruchomieniu',
                 'Crash reporter - automatyczne raporty błędów',
-                'Auto-instalacja Java jeśli brak',
-                'Discord Rich Presence - pokazuj status w Discord'
+                'Auto-instalacja Java jeśli brak'
             ],
             improved: [
                 'Zoptymalizowane pobieranie plików (5 równolegle)',

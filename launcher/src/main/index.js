@@ -6,7 +6,6 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 const GameManager = require('./gameManager');
-const discordRPC = require('./discordRPC');
 const { getChangelog, getLatestChangelog } = require('./changelog');
 const { getAvailableThemes, getTheme, getThemeVariables } = require('./themes');
 
@@ -51,12 +50,6 @@ const store = new Store({
         launcherVersion: '1.0.0',
         autoUpdate: true,
         theme: 'dark',
-
-        // Discord Rich Presence
-        discordRPC: {
-            enabled: true,
-            clientId: '' // Użytkownik może podać własne Client ID
-        },
 
         // Changelog - ostatnia widziana wersja
         lastSeenVersion: ''
@@ -231,21 +224,8 @@ ipcMain.handle('get-launcher-version', () => {
 // INICJALIZACJA APLIKACJI
 // ============================================
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
     createWindow();
-
-    // Inicjalizuj Discord RPC
-    const discordSettings = store.get('discordRPC');
-    if (discordSettings?.enabled) {
-        try {
-            const clientId = discordSettings.clientId || null;
-            await discordRPC.init(clientId);
-            discordRPC.setEnabled(true);
-            console.log('[Discord RPC] Initialized');
-        } catch (error) {
-            console.warn('[Discord RPC] Failed to initialize:', error.message);
-        }
-    }
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
@@ -254,17 +234,10 @@ app.whenReady().then(async () => {
     });
 });
 
-app.on('window-all-closed', async () => {
-    // Zamknij Discord RPC
-    await discordRPC.destroy();
-
+app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit();
     }
-});
-
-app.on('before-quit', async () => {
-    await discordRPC.destroy();
 });
 
 // ============================================
@@ -297,58 +270,6 @@ if (autoUpdater) {
 // Sprawdzenie statusu gry
 ipcMain.handle('is-game-running', () => {
     return gameManager ? gameManager.gameProcess !== null : false;
-});
-
-// ============================================
-// DISCORD RICH PRESENCE IPC HANDLERS
-// ============================================
-
-// Włącz/wyłącz Discord RPC
-ipcMain.handle('discord-rpc-set-enabled', async (event, enabled) => {
-    store.set('discordRPC.enabled', enabled);
-    discordRPC.setEnabled(enabled);
-
-    // Jeśli włączamy i nie jesteśmy połączeni, spróbuj połączyć
-    if (enabled && !discordRPC.isConnected()) {
-        const clientId = store.get('discordRPC.clientId') || null;
-        await discordRPC.init(clientId);
-    }
-
-    return { success: true, enabled };
-});
-
-// Ustaw Client ID
-ipcMain.handle('discord-rpc-set-client-id', async (event, clientId) => {
-    store.set('discordRPC.clientId', clientId);
-
-    // Restart RPC z nowym ID
-    if (discordRPC.isEnabled()) {
-        await discordRPC.destroy();
-        await discordRPC.init(clientId);
-    }
-
-    return { success: true };
-});
-
-// Pobierz status Discord RPC
-ipcMain.handle('discord-rpc-get-status', () => {
-    return {
-        enabled: discordRPC.isEnabled(),
-        connected: discordRPC.isConnected(),
-        clientId: store.get('discordRPC.clientId') || ''
-    };
-});
-
-// Ustaw nazwę użytkownika (dla prezencji)
-ipcMain.handle('discord-rpc-set-username', (event, username) => {
-    discordRPC.setUsername(username);
-    return { success: true };
-});
-
-// Ustaw nazwę serwera
-ipcMain.handle('discord-rpc-set-server', (event, serverName) => {
-    discordRPC.setServerName(serverName);
-    return { success: true };
 });
 
 // ============================================
@@ -432,5 +353,4 @@ ipcMain.handle('set-theme', (event, themeId) => {
     return { success: false, error: 'Theme not found' };
 });
 
-// Eksportuj discordRPC dla GameManager
-module.exports = { discordRPC };
+module.exports = {};

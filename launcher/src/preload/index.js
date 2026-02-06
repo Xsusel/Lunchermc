@@ -108,17 +108,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
 
     // ============================================
-    // DISCORD RICH PRESENCE
-    // ============================================
-    discordRPC: {
-        setEnabled: (enabled) => ipcRenderer.invoke('discord-rpc-set-enabled', enabled),
-        setClientId: (clientId) => ipcRenderer.invoke('discord-rpc-set-client-id', clientId),
-        getStatus: () => ipcRenderer.invoke('discord-rpc-get-status'),
-        setUsername: (username) => ipcRenderer.invoke('discord-rpc-set-username', username),
-        setServer: (serverName) => ipcRenderer.invoke('discord-rpc-set-server', serverName)
-    },
-
-    // ============================================
     // CHANGELOG
     // ============================================
     getChangelog: () => ipcRenderer.invoke('get-changelog'),
