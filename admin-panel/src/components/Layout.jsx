@@ -14,7 +14,8 @@ import {
     Menu,
     X,
     Gamepad2,
-    Server
+    Server,
+    Download
 } from 'lucide-react';
 
 // Elementy nawigacji
@@ -25,6 +26,7 @@ const navItems = [
     { path: '/config', label: 'Konfiguracja', icon: Settings },
     { path: '/broadcasts', label: 'Powiadomienia', icon: Bell },
     { path: '/logs', label: 'Logi', icon: FileText },
+    { path: '/launcher-versions', label: 'Wersje Launchera', icon: Download },
     { path: '/system', label: 'System', icon: Server }
 ];
 

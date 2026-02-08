@@ -441,6 +441,52 @@
             </div>
         </div>
 
+        <!-- Modal aktualizacji -->
+        <div class="modal" id="update-modal">
+            <div class="modal-content modal-update">
+                <button class="modal-close" id="update-modal-close">&times;</button>
+                <h2 class="modal-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24" style="vertical-align: middle; margin-right: 8px;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Dostępna aktualizacja!
+                </h2>
+
+                <div class="update-info">
+                    <div class="update-versions">
+                        <span class="update-current">Aktualna: <strong id="update-current-version">1.0.0</strong></span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                            <polyline points="12 5 19 12 12 19"/>
+                        </svg>
+                        <span class="update-new">Nowa: <strong id="update-new-version">1.0.0</strong></span>
+                    </div>
+                    <div class="update-changelog" id="update-changelog"></div>
+                </div>
+
+                <div class="update-progress" id="update-progress" style="display: none;">
+                    <div class="progress-info">
+                        <span class="progress-text" id="update-progress-text">Pobieranie...</span>
+                        <span class="progress-percent" id="update-progress-percent">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="update-progress-fill"></div>
+                    </div>
+                </div>
+
+                <div class="update-footer" id="update-footer">
+                    <button class="btn-secondary" id="btn-update-later">Później</button>
+                    <button class="btn-primary" id="btn-update-now">Aktualizuj teraz</button>
+                </div>
+
+                <div class="update-footer" id="update-install-footer" style="display: none;">
+                    <button class="btn-primary" id="btn-update-install">Zainstaluj i uruchom ponownie</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Toast notifications -->
         <div class="toast-container" id="toast-container"></div>
     </div>

@@ -120,6 +120,22 @@ const elements = {
     newsContainer: document.getElementById('news-container'),
     newsToggle: document.getElementById('news-toggle'),
 
+    // Update modal
+    updateModal: document.getElementById('update-modal'),
+    updateModalClose: document.getElementById('update-modal-close'),
+    updateCurrentVersion: document.getElementById('update-current-version'),
+    updateNewVersion: document.getElementById('update-new-version'),
+    updateChangelog: document.getElementById('update-changelog'),
+    updateProgress: document.getElementById('update-progress'),
+    updateProgressText: document.getElementById('update-progress-text'),
+    updateProgressPercent: document.getElementById('update-progress-percent'),
+    updateProgressFill: document.getElementById('update-progress-fill'),
+    updateFooter: document.getElementById('update-footer'),
+    updateInstallFooter: document.getElementById('update-install-footer'),
+    btnUpdateLater: document.getElementById('btn-update-later'),
+    btnUpdateNow: document.getElementById('btn-update-now'),
+    btnUpdateInstall: document.getElementById('btn-update-install'),
+
     // Toast
     toastContainer: document.getElementById('toast-container')
 };
@@ -165,6 +181,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Sprawdź czy pokazać changelog (nowa wersja)
     await checkChangelog();
+
+    // Inicjalizuj system aktualizacji
+    initAutoUpdate();
 
     console.log('XsusLauncher gotowy!');
 });
@@ -347,6 +366,7 @@ function openModal(name) {
     else if (name === 'register') modal = elements.registerModal;
     else if (name === 'changelog') modal = elements.changelogModal;
     else if (name === 'rules') modal = elements.rulesModal;
+    else if (name === 'update') modal = elements.updateModal;
 
     modal?.classList.add('active');
 }
@@ -357,6 +377,7 @@ function closeModal(name) {
     else if (name === 'register') modal = elements.registerModal;
     else if (name === 'changelog') modal = elements.changelogModal;
     else if (name === 'rules') modal = elements.rulesModal;
+    else if (name === 'update') modal = elements.updateModal;
 
     modal?.classList.remove('active');
 
@@ -1511,8 +1532,151 @@ async function handleRulesAccept() {
     }
 }
 
+// ============================================
+// AUTO-UPDATE
+// ============================================
+
+// Przechowywanie danych o dostępnej aktualizacji
+let pendingUpdate = null;
+
+/**
+ * Inicjalizuje system automatycznych aktualizacji
+ */
+function initAutoUpdate() {
+    // Zamykanie modalu aktualizacji
+    elements.updateModalClose?.addEventListener('click', () => closeModal('update'));
+    elements.btnUpdateLater?.addEventListener('click', () => closeModal('update'));
+    elements.updateModal?.addEventListener('click', (e) => {
+        if (e.target === elements.updateModal) closeModal('update');
+    });
+
+    // Przycisk aktualizacji
+    elements.btnUpdateNow?.addEventListener('click', handleDownloadUpdate);
+    elements.btnUpdateInstall?.addEventListener('click', handleInstallUpdate);
+
+    // Nasłuchuj eventów z main process
+    window.electronAPI?.onUpdateAvailable((data) => {
+        console.log('Update available:', data);
+        pendingUpdate = data;
+        showUpdateModal(data);
+    });
+
+    window.electronAPI?.onUpdateDownloadProgress((data) => {
+        if (elements.updateProgressFill) {
+            elements.updateProgressFill.style.width = `${data.percent}%`;
+        }
+        if (elements.updateProgressPercent) {
+            elements.updateProgressPercent.textContent = `${data.percent}%`;
+        }
+        if (elements.updateProgressText) {
+            elements.updateProgressText.textContent = data.status || 'Pobieranie...';
+        }
+    });
+
+    window.electronAPI?.onUpdateDownloaded((data) => {
+        // Pokaż przycisk instalacji
+        if (elements.updateProgress) elements.updateProgress.style.display = 'none';
+        if (elements.updateFooter) elements.updateFooter.style.display = 'none';
+        if (elements.updateInstallFooter) elements.updateInstallFooter.style.display = 'flex';
+        showToast('Aktualizacja pobrana! Kliknij aby zainstalować.', 'success');
+    });
+
+    window.electronAPI?.onUpdateError((data) => {
+        if (elements.updateProgress) elements.updateProgress.style.display = 'none';
+        if (elements.updateFooter) elements.updateFooter.style.display = 'flex';
+        if (elements.btnUpdateNow) {
+            elements.btnUpdateNow.disabled = false;
+            elements.btnUpdateNow.textContent = 'Spróbuj ponownie';
+        }
+        showToast(`Błąd aktualizacji: ${data.error}`, 'error');
+    });
+}
+
+/**
+ * Wyświetla modal z informacją o dostępnej aktualizacji
+ */
+function showUpdateModal(data) {
+    if (elements.updateCurrentVersion) {
+        elements.updateCurrentVersion.textContent = data.currentVersion || '?';
+    }
+    if (elements.updateNewVersion) {
+        elements.updateNewVersion.textContent = data.latestVersion || '?';
+    }
+
+    // Changelog
+    if (elements.updateChangelog && data.changelog) {
+        elements.updateChangelog.innerHTML = `<p>${escapeHtml(data.changelog)}</p>`;
+        elements.updateChangelog.style.display = 'block';
+    } else if (elements.updateChangelog) {
+        elements.updateChangelog.style.display = 'none';
+    }
+
+    // Reset UI
+    if (elements.updateProgress) elements.updateProgress.style.display = 'none';
+    if (elements.updateFooter) elements.updateFooter.style.display = 'flex';
+    if (elements.updateInstallFooter) elements.updateInstallFooter.style.display = 'none';
+    if (elements.btnUpdateNow) {
+        elements.btnUpdateNow.disabled = false;
+        elements.btnUpdateNow.textContent = 'Aktualizuj teraz';
+    }
+
+    // Jeśli aktualizacja jest wymagana, ukryj przycisk "później"
+    if (data.isRequired && elements.btnUpdateLater) {
+        elements.btnUpdateLater.style.display = 'none';
+    }
+
+    openModal('update');
+}
+
+/**
+ * Obsługuje pobieranie aktualizacji
+ */
+async function handleDownloadUpdate() {
+    if (!pendingUpdate) return;
+
+    // Pokaż progress
+    if (elements.updateProgress) elements.updateProgress.style.display = 'block';
+    if (elements.updateFooter) elements.updateFooter.style.display = 'none';
+    if (elements.btnUpdateNow) {
+        elements.btnUpdateNow.disabled = true;
+        elements.btnUpdateNow.textContent = 'Pobieranie...';
+    }
+
+    // Reset progress
+    if (elements.updateProgressFill) elements.updateProgressFill.style.width = '0%';
+    if (elements.updateProgressPercent) elements.updateProgressPercent.textContent = '0%';
+
+    try {
+        await window.electronAPI?.downloadUpdate({
+            downloadUrl: pendingUpdate.downloadUrl,
+            sha256: pendingUpdate.sha256,
+            version: pendingUpdate.latestVersion
+        });
+    } catch (error) {
+        showToast('Błąd pobierania aktualizacji', 'error');
+        if (elements.updateProgress) elements.updateProgress.style.display = 'none';
+        if (elements.updateFooter) elements.updateFooter.style.display = 'flex';
+        if (elements.btnUpdateNow) {
+            elements.btnUpdateNow.disabled = false;
+            elements.btnUpdateNow.textContent = 'Spróbuj ponownie';
+        }
+    }
+}
+
+/**
+ * Obsługuje instalację pobranej aktualizacji
+ */
+function handleInstallUpdate() {
+    window.electronAPI?.installUpdate();
+}
+
 // Odświeżaj konfigurację co 5 minut
 setInterval(loadServerConfig, 5 * 60 * 1000);
 
 // Odświeżaj statusy serwerów co 30 sekund
 setInterval(loadAllServerStatuses, 30 * 1000);
+
+// Sprawdzaj aktualizacje co godzinę
+setInterval(() => {
+    window.electronAPI?.checkForUpdates();
+}, 60 * 60 * 1000);

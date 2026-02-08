@@ -1838,3 +1838,103 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--border-light);
 }
+
+/* ============================================
+   UPDATE MODAL
+   ============================================ */
+.modal-update {
+    max-width: 480px;
+}
+
+.modal-update .modal-title {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.modal-update .modal-title svg {
+    color: var(--accent);
+}
+
+.update-info {
+    margin-bottom: 20px;
+}
+
+.update-versions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 16px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+.update-versions svg {
+    color: var(--accent);
+}
+
+.update-current {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.update-current strong {
+    color: var(--text-muted);
+}
+
+.update-new {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.update-new strong {
+    color: var(--success);
+}
+
+.update-changelog {
+    padding: 12px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.update-progress {
+    margin-bottom: 16px;
+}
+
+.update-progress .progress-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 13px;
+}
+
+.update-progress .progress-bar {
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.update-progress .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.update-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
