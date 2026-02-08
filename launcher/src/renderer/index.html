@@ -180,6 +180,26 @@
                                 Java
                             </h3>
 
+                            <!-- Status Java -->
+                            <div class="setting-item">
+                                <label>Status Java</label>
+                                <div class="java-status" id="java-status">
+                                    <span class="java-status-icon" id="java-status-icon">&#8987;</span>
+                                    <span class="java-status-text" id="java-status-text">Sprawdzanie...</span>
+                                </div>
+                                <div class="java-actions" id="java-actions" style="display: none;">
+                                    <button class="btn-primary btn-sm" id="btn-java-install">
+                                        Zainstaluj Java automatycznie
+                                    </button>
+                                </div>
+                                <div class="java-install-progress" id="java-install-progress" style="display: none;">
+                                    <div class="progress-bar">
+                                        <div class="progress-fill" id="java-install-fill"></div>
+                                    </div>
+                                    <span class="java-install-status" id="java-install-status">Instalowanie...</span>
+                                </div>
+                            </div>
+
                             <div class="setting-item">
                                 <label>Ścieżka do Java</label>
                                 <div class="path-input">

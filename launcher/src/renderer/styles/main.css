@@ -1938,3 +1938,76 @@ body {
     padding-top: 16px;
     border-top: 1px solid var(--border);
 }
+
+/* ============================================
+   JAVA STATUS
+   ============================================ */
+.java-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+.java-status-icon {
+    font-size: 16px;
+}
+
+.java-status.ok .java-status-icon {
+    color: var(--success);
+}
+
+.java-status.error .java-status-icon {
+    color: var(--error);
+}
+
+.java-status.installing .java-status-icon {
+    color: var(--accent);
+    animation: pulse 1.5s infinite;
+}
+
+.java-status-text {
+    color: var(--text-secondary);
+}
+
+.java-actions {
+    margin-top: 8px;
+}
+
+.btn-sm {
+    padding: 6px 14px;
+    font-size: 12px;
+}
+
+.java-install-progress {
+    margin-top: 8px;
+}
+
+.java-install-progress .progress-bar {
+    height: 4px;
+    background: var(--bg-tertiary);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.java-install-progress .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.java-install-status {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
