@@ -15,7 +15,10 @@ const state = {
     serverOnline: true,
     currentTheme: 'dark',
     rulesAccepted: false,
-    pendingRules: null
+    pendingRules: null,
+    servers: [],
+    selectedServerId: null,
+    serverStatuses: {}
 };
 
 // ============================================
@@ -39,10 +42,7 @@ const elements = {
 
     // Strona główna
     broadcastsContainer: document.getElementById('broadcasts-container'),
-    serverStatusIndicator: document.getElementById('server-status-indicator'),
-    serverAddress: document.getElementById('server-address'),
-    serverPing: document.getElementById('server-ping'),
-    playersOnline: document.getElementById('players-online'),
+    serverList: document.getElementById('server-list'),
     gameVersion: document.getElementById('game-version'),
     modsCount: document.getElementById('mods-count'),
     progressContainer: document.getElementById('progress-container'),
@@ -557,7 +557,6 @@ async function loadServerConfig() {
 
             // Aktualizuj UI
             const config = response.data.config;
-            elements.serverAddress.textContent = `${config.serverIp}:${config.serverPort}`;
 
             let versionText = config.gameVersion;
             if (config.loaderType !== 'vanilla') {
@@ -565,35 +564,45 @@ async function loadServerConfig() {
             }
             elements.gameVersion.textContent = versionText;
 
-            // Liczba modów - API zwraca tylko włączone mody, więc liczymy wszystkie
-            // Plus pliki typu 'mod' z listy files
+            // Liczba modów
             const modsFromMods = response.data.mods?.length || 0;
             const modsFromFiles = response.data.files?.filter(f => f.type === 'mod').length || 0;
-            // Użyj większej wartości (files zawiera mody, więc nie sumujemy)
             const modsCount = Math.max(modsFromMods, modsFromFiles);
             if (elements.modsCount) {
                 elements.modsCount.textContent = modsCount;
             }
 
-            // Status serwera
-            if (config.maintenanceMode) {
-                elements.serverStatusIndicator.className = 'status-indicator maintenance';
-                state.serverOnline = false;
+            // Serwery
+            state.servers = response.data.servers || [];
+
+            // Przywróć zapisany wybór serwera
+            const savedServerId = await window.electronAPI?.getStore('selectedServerId');
+            if (savedServerId && state.servers.find(s => s.id === savedServerId)) {
+                state.selectedServerId = savedServerId;
             } else {
-                elements.serverStatusIndicator.className = 'status-indicator online';
-                state.serverOnline = true;
+                // Wybierz domyślny serwer
+                const defaultServer = state.servers.find(s => s.isDefault) || state.servers[0];
+                state.selectedServerId = defaultServer?.id || null;
             }
+
+            // Renderuj listę serwerów
+            renderServerList();
 
             // Wyświetl powiadomienia
             displayBroadcasts(response.data.broadcasts);
 
-            // Pobierz status serwera MC (ping, gracze)
-            loadServerStatus();
+            // Pobierz statusy serwerów
+            loadAllServerStatuses();
+
+            // Maintenance check
+            state.serverOnline = !config.maintenanceMode;
+            updateUserUI();
         }
     } catch (error) {
         console.error('Błąd ładowania konfiguracji:', error);
-        elements.serverAddress.textContent = 'Brak połączenia';
-        elements.serverStatusIndicator.className = 'status-indicator offline';
+        if (elements.serverList) {
+            elements.serverList.innerHTML = '<div class="server-list-empty">Brak połączenia z serwerem API</div>';
+        }
         state.serverOnline = false;
 
         showToast('Nie można połączyć z serwerem', 'error');
@@ -601,52 +610,137 @@ async function loadServerConfig() {
 }
 
 /**
- * Pobiera status serwera MC (ping, gracze online)
+ * Renderuje listę serwerów w UI
  */
-async function loadServerStatus() {
+function renderServerList() {
+    if (!elements.serverList) return;
+
+    if (state.servers.length === 0) {
+        elements.serverList.innerHTML = '<div class="server-list-empty">Brak dostępnych serwerów</div>';
+        return;
+    }
+
+    elements.serverList.innerHTML = state.servers.map(server => {
+        const isSelected = server.id === state.selectedServerId;
+        const status = state.serverStatuses[server.id];
+        const statusClass = status ? (status.online ? 'online' : 'offline') : 'checking';
+
+        // Formatuj ping
+        let pingText = '';
+        let pingClass = '';
+        if (status && status.online && status.latency) {
+            pingText = `${status.latency}ms`;
+            if (status.latency < 50) pingClass = 'good';
+            else if (status.latency < 150) pingClass = 'medium';
+            else pingClass = 'bad';
+        }
+
+        // Formatuj graczy
+        let playersText = '';
+        let playersClass = '';
+        if (status && status.online && status.players) {
+            playersText = `${status.players.online}/${status.players.max}`;
+            if (status.players.online > 0) playersClass = 'has-players';
+        } else if (status && !status.online) {
+            playersText = 'Offline';
+        } else {
+            playersText = '...';
+        }
+
+        return `
+            <div class="server-item ${isSelected ? 'selected' : ''}" data-server-id="${server.id}">
+                <div class="server-item-indicator ${statusClass}"></div>
+                <div class="server-item-info">
+                    <div class="server-item-name">
+                        ${escapeHtml(server.name)}
+                        ${server.isDefault ? '<span class="server-item-default-badge">Domyślny</span>' : ''}
+                    </div>
+                    <div class="server-item-address">${escapeHtml(server.ip)}:${server.port || 25565}</div>
+                    ${server.description ? `<div class="server-item-description">${escapeHtml(server.description)}</div>` : ''}
+                </div>
+                <div class="server-item-right">
+                    <span class="server-item-players ${playersClass}">${playersText}</span>
+                    ${pingText ? `<span class="server-item-ping ${pingClass}">${pingText}</span>` : ''}
+                </div>
+                <div class="server-item-selected-check">
+                    <svg class="server-item-check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // Dodaj event listenery
+    elements.serverList.querySelectorAll('.server-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const serverId = parseInt(item.dataset.serverId);
+            selectServer(serverId);
+        });
+    });
+}
+
+/**
+ * Wybiera serwer
+ */
+async function selectServer(serverId) {
+    state.selectedServerId = serverId;
+
+    // Zapisz wybór
+    await window.electronAPI?.setStore('selectedServerId', serverId);
+
+    // Zaktualizuj UI
+    renderServerList();
+
+    // Zaktualizuj stan online na podstawie wybranego serwera
+    const status = state.serverStatuses[serverId];
+    if (status) {
+        state.serverOnline = status.online && !state.config?.config?.maintenanceMode;
+    }
+    updateUserUI();
+}
+
+/**
+ * Pobiera statusy wszystkich serwerów
+ */
+async function loadAllServerStatuses() {
+    for (const server of state.servers) {
+        loadServerStatus(server.id);
+    }
+}
+
+/**
+ * Pobiera status konkretnego serwera MC
+ */
+async function loadServerStatus(serverId) {
     try {
-        const response = await api.getServerStatus();
+        const url = serverId ? `serverId=${serverId}` : '';
+        const response = await api.getServerStatus(url);
 
         if (response.success && response.data) {
             const data = response.data;
+            const id = serverId || 'default';
 
-            // Aktualizuj ping
-            if (elements.serverPing) {
-                const pingValue = elements.serverPing.querySelector('.ping-value');
-                if (data.online && data.latency) {
-                    pingValue.textContent = `${data.latency}ms`;
-                    elements.serverPing.classList.remove('offline');
-                    elements.serverPing.classList.add('online');
+            state.serverStatuses[id] = {
+                online: data.online,
+                players: data.players,
+                latency: data.latency,
+                version: data.version,
+                maintenanceMode: data.maintenanceMode
+            };
+
+            // Zaktualizuj rendering
+            renderServerList();
+
+            // Jeśli to wybrany serwer, zaktualizuj stan online
+            if (id === state.selectedServerId) {
+                if (data.maintenanceMode) {
+                    state.serverOnline = false;
                 } else {
-                    pingValue.textContent = '--';
-                    elements.serverPing.classList.remove('online');
-                    elements.serverPing.classList.add('offline');
+                    state.serverOnline = data.online;
                 }
+                updateUserUI();
             }
-
-            // Aktualizuj liczbę graczy
-            if (elements.playersOnline) {
-                if (data.online && data.players) {
-                    elements.playersOnline.textContent = `${data.players.online}/${data.players.max}`;
-                } else {
-                    elements.playersOnline.textContent = '0';
-                }
-            }
-
-            // Aktualizuj status serwera
-            if (data.maintenanceMode) {
-                elements.serverStatusIndicator.className = 'status-indicator maintenance';
-                state.serverOnline = false;
-            } else if (data.online) {
-                elements.serverStatusIndicator.className = 'status-indicator online';
-                state.serverOnline = true;
-            } else {
-                elements.serverStatusIndicator.className = 'status-indicator offline';
-                state.serverOnline = false;
-            }
-
-            // Aktualizuj przycisk graj
-            updateUserUI();
         }
     } catch (error) {
         console.error('Błąd pobierania statusu serwera:', error);
@@ -680,8 +774,13 @@ async function handlePlay() {
         return;
     }
 
+    if (!state.selectedServerId) {
+        showToast('Wybierz serwer z listy', 'warning');
+        return;
+    }
+
     if (!state.serverOnline) {
-        showToast('Serwer jest w trybie konserwacji', 'warning');
+        showToast('Serwer jest w trybie konserwacji lub niedostępny', 'warning');
         return;
     }
 
@@ -704,11 +803,15 @@ async function handlePlay() {
     elements.progressSpeed.textContent = '';
     if (elements.progressEta) elements.progressEta.textContent = '';
 
+    // Pobierz dane wybranego serwera
+    const selectedServer = state.servers.find(s => s.id === state.selectedServerId);
+
     try {
         await gameLauncher.launch(
             {
                 username: state.user.username,
-                token: state.token
+                token: state.token,
+                selectedServer: selectedServer
             },
             settings,
             {
@@ -1411,5 +1514,5 @@ async function handleRulesAccept() {
 // Odświeżaj konfigurację co 5 minut
 setInterval(loadServerConfig, 5 * 60 * 1000);
 
-// Odświeżaj status serwera MC co 30 sekund
-setInterval(loadServerStatus, 30 * 1000);
+// Odświeżaj statusy serwerów co 30 sekund
+setInterval(loadAllServerStatuses, 30 * 1000);
