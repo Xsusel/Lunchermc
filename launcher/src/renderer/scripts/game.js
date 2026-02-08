@@ -181,14 +181,11 @@ class GameLauncher {
         try {
             this.isLaunching = true;
 
-            // 1. Sprawdz Java
-            onStatusChange?.('Wykrywanie Java...');
-            onProgress?.(0, 'Sprawdzanie Java...');
-
-            const javaAvailable = await this.checkJavaAvailable();
-            if (!javaAvailable) {
-                throw new Error('Nie znaleziono Java. Zainstaluj Java 17+ lub wskaż ścieżkę w ustawieniach.');
-            }
+            // 1. Informacja o wykrywaniu Java
+            // Nie blokujemy tutaj - gameManager w main process
+            // automatycznie wykryje i zainstaluje Java jesli potrzeba
+            onStatusChange?.('Przygotowywanie...');
+            onProgress?.(0, 'Przygotowywanie...');
 
             // 2. Pobierz konfiguracje z API
             onStatusChange?.('Pobieranie konfiguracji...');

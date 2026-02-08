@@ -65,6 +65,14 @@ const elements = {
     javaPath: document.getElementById('java-path'),
     btnJavaBrowse: document.getElementById('btn-java-browse'),
     customJavaArgs: document.getElementById('custom-java-args'),
+    javaStatus: document.getElementById('java-status'),
+    javaStatusIcon: document.getElementById('java-status-icon'),
+    javaStatusText: document.getElementById('java-status-text'),
+    javaActions: document.getElementById('java-actions'),
+    btnJavaInstall: document.getElementById('btn-java-install'),
+    javaInstallProgress: document.getElementById('java-install-progress'),
+    javaInstallFill: document.getElementById('java-install-fill'),
+    javaInstallStatus: document.getElementById('java-install-status'),
     resWidth: document.getElementById('res-width'),
     resHeight: document.getElementById('res-height'),
     fullscreen: document.getElementById('fullscreen'),
@@ -1001,6 +1009,12 @@ async function initSettings() {
     elements.btnResetSettings?.addEventListener('click', resetSettings);
     elements.btnSaveSettings?.addEventListener('click', saveSettings);
 
+    // Przycisk auto-instalacji Java
+    elements.btnJavaInstall?.addEventListener('click', handleAutoInstallJava);
+
+    // Sprawdz status Java
+    await checkJavaStatus();
+
     // Inicjalizuj selektor motywów
     await initThemeSelector();
 }
@@ -1529,6 +1543,127 @@ async function handleRulesAccept() {
             elements.btnRulesAccept.textContent = 'Akceptuję i chcę grać';
             elements.btnRulesAccept.disabled = !elements.rulesAcceptCheckbox?.checked;
         }
+    }
+}
+
+// ============================================
+// JAVA STATUS I AUTO-INSTALACJA
+// ============================================
+
+/**
+ * Sprawdza status Java i aktualizuje UI
+ */
+async function checkJavaStatus() {
+    if (!elements.javaStatus) return;
+
+    try {
+        // Najpierw sprawdz czy launcher ma zainstalowana Java
+        const installed = await window.electronAPI?.getInstalledJava();
+        if (installed && installed.installed) {
+            setJavaStatusOk(`Java ${installed.info?.version || '?'} (zainstalowana przez launcher)`, installed.path);
+            return;
+        }
+
+        // Wykryj systemowa Java
+        const installations = await window.electronAPI?.detectJava();
+        if (installations && installations.length > 0) {
+            const best = installations[0];
+            setJavaStatusOk(`Java ${best.version} (${best.source})`, best.path);
+
+            // Ustaw sciezke w polu jesli puste
+            if (!elements.javaPath.value) {
+                elements.javaPath.value = best.path;
+            }
+        } else {
+            setJavaStatusError();
+        }
+    } catch (error) {
+        console.error('Blad sprawdzania Java:', error);
+        setJavaStatusError();
+    }
+}
+
+function setJavaStatusOk(text, javaPath) {
+    if (elements.javaStatus) elements.javaStatus.className = 'java-status ok';
+    if (elements.javaStatusIcon) elements.javaStatusIcon.textContent = '\u2714';
+    if (elements.javaStatusText) elements.javaStatusText.textContent = text;
+    if (elements.javaActions) elements.javaActions.style.display = 'none';
+    if (elements.javaInstallProgress) elements.javaInstallProgress.style.display = 'none';
+
+    // Ustaw sciezke w polu jesli nie jest ustawiona
+    if (javaPath && elements.javaPath && !elements.javaPath.value) {
+        elements.javaPath.value = javaPath;
+    }
+}
+
+function setJavaStatusError() {
+    if (elements.javaStatus) elements.javaStatus.className = 'java-status error';
+    if (elements.javaStatusIcon) elements.javaStatusIcon.textContent = '\u2718';
+    if (elements.javaStatusText) elements.javaStatusText.textContent = 'Java nie znaleziona - wymagana do gry!';
+    if (elements.javaActions) elements.javaActions.style.display = 'block';
+    if (elements.javaInstallProgress) elements.javaInstallProgress.style.display = 'none';
+}
+
+/**
+ * Obsluguje automatyczna instalacje Java z ustawien
+ */
+async function handleAutoInstallJava() {
+    if (!elements.btnJavaInstall) return;
+
+    // Zablokuj przycisk
+    elements.btnJavaInstall.disabled = true;
+    elements.btnJavaInstall.textContent = 'Instalowanie...';
+
+    // Pokaz progress
+    if (elements.javaActions) elements.javaActions.style.display = 'none';
+    if (elements.javaInstallProgress) elements.javaInstallProgress.style.display = 'block';
+    if (elements.javaInstallFill) elements.javaInstallFill.style.width = '0%';
+    if (elements.javaInstallStatus) elements.javaInstallStatus.textContent = 'Pobieranie Java 17 (Adoptium)...';
+
+    // Status
+    if (elements.javaStatus) elements.javaStatus.className = 'java-status installing';
+    if (elements.javaStatusIcon) elements.javaStatusIcon.textContent = '\u21BB';
+    if (elements.javaStatusText) elements.javaStatusText.textContent = 'Instalowanie Java...';
+
+    // Nasluchuj progress z download-progress
+    const progressHandler = (data) => {
+        if (data && data.type === 'java-installer') {
+            const percent = data.percent || 0;
+            if (elements.javaInstallFill) elements.javaInstallFill.style.width = `${percent}%`;
+            if (elements.javaInstallStatus) {
+                elements.javaInstallStatus.textContent = percent < 100
+                    ? `Pobieranie Java... ${percent}%`
+                    : 'Rozpakowywanie...';
+            }
+        }
+    };
+
+    window.electronAPI?.onDownloadProgress?.(progressHandler);
+
+    try {
+        const result = await window.electronAPI?.autoInstallJava(17);
+
+        if (result && result.success) {
+            showToast('Java zainstalowana pomyslnie!', 'success');
+            elements.javaPath.value = result.javaPath;
+
+            // Odswierz status
+            await checkJavaStatus();
+        } else {
+            showToast(`Blad instalacji Java: ${result?.error || 'Nieznany blad'}`, 'error');
+            setJavaStatusError();
+            elements.btnJavaInstall.disabled = false;
+            elements.btnJavaInstall.textContent = 'Sprobuj ponownie';
+            if (elements.javaActions) elements.javaActions.style.display = 'block';
+        }
+    } catch (error) {
+        showToast(`Blad instalacji Java: ${error.message}`, 'error');
+        setJavaStatusError();
+        elements.btnJavaInstall.disabled = false;
+        elements.btnJavaInstall.textContent = 'Sprobuj ponownie';
+        if (elements.javaActions) elements.javaActions.style.display = 'block';
+    } finally {
+        if (elements.javaInstallProgress) elements.javaInstallProgress.style.display = 'none';
     }
 }
 

@@ -1468,7 +1468,9 @@ class GameManager {
                     const bestJava = await this.getBestJavaForVersion(config.gameVersion);
                     if (bestJava) {
                         javaPath = bestJava.path;
-                        console.log(`Using Java ${bestJava.version} from ${javaPath}`);
+                        // Zapisz wykryta sciezke Java do store
+                        this.store.set('javaPath', javaPath);
+                        console.log(`Using Java ${bestJava.version} from ${javaPath} (saved to store)`);
                     }
                 }
 
@@ -1487,6 +1489,9 @@ class GameManager {
 
                     try {
                         javaPath = await this.autoInstallJava(requiredJava);
+                        // Zapisz sciezke do store zeby nie musiec szukac/instalowac ponownie
+                        this.store.set('javaPath', javaPath);
+                        console.log(`Java path saved to store: ${javaPath}`);
                     } catch (installError) {
                         throw new Error(`Nie znaleziono Java i nie udało się jej zainstalować: ${installError.message}`);
                     }
