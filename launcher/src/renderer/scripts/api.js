@@ -228,8 +228,9 @@ class ApiClient {
     /**
      * Sprawdza status serwera (z cache 15s)
      */
-    async getServerStatus(forceRefresh = false) {
-        return this.request('/launcher/server-status', {}, {
+    async getServerStatus(queryParams = '', forceRefresh = false) {
+        const url = queryParams ? `/launcher/server-status?${queryParams}` : '/launcher/server-status';
+        return this.request(url, {}, {
             useCache: true,
             cacheTTL: 15 * 1000, // 15 sekund cache dla statusu
             forceRefresh

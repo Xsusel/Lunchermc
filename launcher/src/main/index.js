@@ -9,12 +9,17 @@ const GameManager = require('./gameManager');
 const { getChangelog, getLatestChangelog } = require('./changelog');
 const { getAvailableThemes, getTheme, getThemeVariables } = require('./themes');
 
-// Auto-updater (opcjonalny)
+const https = require('https');
+const http = require('http');
+const fs = require('fs');
+const crypto = require('crypto');
+
+// Auto-updater (opcjonalny - electron-updater)
 let autoUpdater;
 try {
     autoUpdater = require('electron-updater').autoUpdater;
 } catch (e) {
-    console.warn('electron-updater not available');
+    console.warn('electron-updater not available, using custom updater');
     autoUpdater = null;
 }
 
@@ -98,8 +103,8 @@ function createWindow() {
         mainWindow.show();
 
         // Sprawdź aktualizacje w tle
-        if (autoUpdater && store.get('autoUpdate') && process.env.NODE_ENV !== 'development') {
-            autoUpdater.checkForUpdatesAndNotify();
+        if (store.get('autoUpdate') && process.env.NODE_ENV !== 'development') {
+            setTimeout(() => checkForUpdates(), 3000); // 3s delay po starcie
         }
     });
 
@@ -241,25 +246,178 @@ app.on('window-all-closed', () => {
 });
 
 // ============================================
-// AUTO-UPDATE
+// AUTO-UPDATE (Custom API-based)
 // ============================================
 
+let pendingUpdatePath = null;
+
+// Sprawdza aktualizacje z API serwera
+async function checkForUpdates() {
+    try {
+        const apiUrl = store.get('apiUrl') || 'https://mc.xsus.pl';
+        const currentVersion = app.getVersion();
+        const url = `${apiUrl}/api/launcher/check-update?version=${currentVersion}`;
+
+        const response = await fetchJson(url);
+
+        if (response && response.success && response.data && response.data.updateAvailable) {
+            console.log(`Update available: ${response.data.latestVersion}`);
+            mainWindow?.webContents.send('update-available', {
+                currentVersion: response.data.currentVersion,
+                latestVersion: response.data.latestVersion,
+                downloadUrl: response.data.downloadUrl,
+                sha256: response.data.sha256,
+                changelog: response.data.changelog,
+                isRequired: response.data.isRequired
+            });
+        } else {
+            console.log('No update available');
+            mainWindow?.webContents.send('update-not-available');
+        }
+    } catch (error) {
+        console.error('Update check error:', error);
+    }
+}
+
+// Helper: fetch JSON from URL
+function fetchJson(url) {
+    return new Promise((resolve, reject) => {
+        const client = url.startsWith('https') ? https : http;
+        client.get(url, { timeout: 10000 }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(data));
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        }).on('error', reject);
+    });
+}
+
+// Pobiera aktualizację
+async function downloadUpdate(downloadUrl, sha256, version) {
+    const tempDir = path.join(app.getPath('temp'), 'xsuslauncher-update');
+    if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const ext = process.platform === 'win32' ? '.exe' : '.AppImage';
+    const filePath = path.join(tempDir, `XsusLauncher-${version}${ext}`);
+
+    return new Promise((resolve, reject) => {
+        mainWindow?.webContents.send('update-download-progress', { percent: 0, status: 'Rozpoczynanie pobierania...' });
+
+        const client = downloadUrl.startsWith('https') ? https : http;
+
+        const makeRequest = (url) => {
+            client.get(url, (res) => {
+                // Handle redirects
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    makeRequest(res.headers.location);
+                    return;
+                }
+
+                if (res.statusCode !== 200) {
+                    reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+                    return;
+                }
+
+                const totalSize = parseInt(res.headers['content-length'], 10) || 0;
+                let downloadedSize = 0;
+                const fileStream = fs.createWriteStream(filePath);
+                const hash = crypto.createHash('sha256');
+
+                res.on('data', (chunk) => {
+                    downloadedSize += chunk.length;
+                    hash.update(chunk);
+
+                    if (totalSize > 0) {
+                        const percent = Math.round((downloadedSize / totalSize) * 100);
+                        mainWindow?.webContents.send('update-download-progress', {
+                            percent,
+                            downloaded: downloadedSize,
+                            total: totalSize,
+                            status: `Pobieranie aktualizacji... ${percent}%`
+                        });
+                    }
+                });
+
+                res.pipe(fileStream);
+
+                fileStream.on('finish', () => {
+                    fileStream.close(() => {
+                        // Weryfikuj SHA256
+                        const fileHash = hash.digest('hex');
+                        if (sha256 && fileHash !== sha256) {
+                            fs.unlinkSync(filePath);
+                            reject(new Error('Weryfikacja SHA256 nie powiodła się'));
+                            return;
+                        }
+
+                        pendingUpdatePath = filePath;
+                        resolve(filePath);
+                    });
+                });
+
+                fileStream.on('error', (err) => {
+                    fs.unlinkSync(filePath).catch(() => {});
+                    reject(err);
+                });
+            }).on('error', reject);
+        };
+
+        makeRequest(downloadUrl);
+    });
+}
+
+// IPC: Ręczne sprawdzenie aktualizacji
+ipcMain.handle('check-for-updates', async () => {
+    await checkForUpdates();
+    return { success: true };
+});
+
+// IPC: Pobierz i zainstaluj aktualizację
+ipcMain.handle('download-update', async (event, { downloadUrl, sha256, version }) => {
+    try {
+        const filePath = await downloadUpdate(downloadUrl, sha256, version);
+        mainWindow?.webContents.send('update-downloaded', { filePath, version });
+        return { success: true, filePath };
+    } catch (error) {
+        mainWindow?.webContents.send('update-error', { error: error.message });
+        return { success: false, error: error.message };
+    }
+});
+
+// IPC: Zainstaluj pobraną aktualizację
+ipcMain.on('install-update', () => {
+    if (pendingUpdatePath && fs.existsSync(pendingUpdatePath)) {
+        // Uruchom instalator i zamknij launcher
+        shell.openPath(pendingUpdatePath);
+        setTimeout(() => app.quit(), 1000);
+    } else if (autoUpdater) {
+        autoUpdater.quitAndInstall();
+    }
+});
+
+// electron-updater events (backup)
 if (autoUpdater) {
-    autoUpdater.on('update-available', () => {
-        mainWindow?.webContents.send('update-available');
+    autoUpdater.on('update-available', (info) => {
+        mainWindow?.webContents.send('update-available', {
+            currentVersion: app.getVersion(),
+            latestVersion: info.version,
+            changelog: info.releaseNotes || ''
+        });
     });
 
     autoUpdater.on('update-downloaded', () => {
-        mainWindow?.webContents.send('update-downloaded');
+        mainWindow?.webContents.send('update-downloaded', {});
     });
 
     autoUpdater.on('error', (error) => {
         console.error('Auto-update error:', error);
-    });
-
-    // Instalacja aktualizacji na żądanie
-    ipcMain.on('install-update', () => {
-        autoUpdater.quitAndInstall();
     });
 }
 

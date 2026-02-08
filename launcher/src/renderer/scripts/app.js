@@ -15,7 +15,10 @@ const state = {
     serverOnline: true,
     currentTheme: 'dark',
     rulesAccepted: false,
-    pendingRules: null
+    pendingRules: null,
+    servers: [],
+    selectedServerId: null,
+    serverStatuses: {}
 };
 
 // ============================================
@@ -39,10 +42,7 @@ const elements = {
 
     // Strona główna
     broadcastsContainer: document.getElementById('broadcasts-container'),
-    serverStatusIndicator: document.getElementById('server-status-indicator'),
-    serverAddress: document.getElementById('server-address'),
-    serverPing: document.getElementById('server-ping'),
-    playersOnline: document.getElementById('players-online'),
+    serverList: document.getElementById('server-list'),
     gameVersion: document.getElementById('game-version'),
     modsCount: document.getElementById('mods-count'),
     progressContainer: document.getElementById('progress-container'),
@@ -120,6 +120,22 @@ const elements = {
     newsContainer: document.getElementById('news-container'),
     newsToggle: document.getElementById('news-toggle'),
 
+    // Update modal
+    updateModal: document.getElementById('update-modal'),
+    updateModalClose: document.getElementById('update-modal-close'),
+    updateCurrentVersion: document.getElementById('update-current-version'),
+    updateNewVersion: document.getElementById('update-new-version'),
+    updateChangelog: document.getElementById('update-changelog'),
+    updateProgress: document.getElementById('update-progress'),
+    updateProgressText: document.getElementById('update-progress-text'),
+    updateProgressPercent: document.getElementById('update-progress-percent'),
+    updateProgressFill: document.getElementById('update-progress-fill'),
+    updateFooter: document.getElementById('update-footer'),
+    updateInstallFooter: document.getElementById('update-install-footer'),
+    btnUpdateLater: document.getElementById('btn-update-later'),
+    btnUpdateNow: document.getElementById('btn-update-now'),
+    btnUpdateInstall: document.getElementById('btn-update-install'),
+
     // Toast
     toastContainer: document.getElementById('toast-container')
 };
@@ -165,6 +181,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Sprawdź czy pokazać changelog (nowa wersja)
     await checkChangelog();
+
+    // Inicjalizuj system aktualizacji
+    initAutoUpdate();
 
     console.log('XsusLauncher gotowy!');
 });
@@ -347,6 +366,7 @@ function openModal(name) {
     else if (name === 'register') modal = elements.registerModal;
     else if (name === 'changelog') modal = elements.changelogModal;
     else if (name === 'rules') modal = elements.rulesModal;
+    else if (name === 'update') modal = elements.updateModal;
 
     modal?.classList.add('active');
 }
@@ -357,6 +377,7 @@ function closeModal(name) {
     else if (name === 'register') modal = elements.registerModal;
     else if (name === 'changelog') modal = elements.changelogModal;
     else if (name === 'rules') modal = elements.rulesModal;
+    else if (name === 'update') modal = elements.updateModal;
 
     modal?.classList.remove('active');
 
@@ -557,7 +578,6 @@ async function loadServerConfig() {
 
             // Aktualizuj UI
             const config = response.data.config;
-            elements.serverAddress.textContent = `${config.serverIp}:${config.serverPort}`;
 
             let versionText = config.gameVersion;
             if (config.loaderType !== 'vanilla') {
@@ -565,35 +585,45 @@ async function loadServerConfig() {
             }
             elements.gameVersion.textContent = versionText;
 
-            // Liczba modów - API zwraca tylko włączone mody, więc liczymy wszystkie
-            // Plus pliki typu 'mod' z listy files
+            // Liczba modów
             const modsFromMods = response.data.mods?.length || 0;
             const modsFromFiles = response.data.files?.filter(f => f.type === 'mod').length || 0;
-            // Użyj większej wartości (files zawiera mody, więc nie sumujemy)
             const modsCount = Math.max(modsFromMods, modsFromFiles);
             if (elements.modsCount) {
                 elements.modsCount.textContent = modsCount;
             }
 
-            // Status serwera
-            if (config.maintenanceMode) {
-                elements.serverStatusIndicator.className = 'status-indicator maintenance';
-                state.serverOnline = false;
+            // Serwery
+            state.servers = response.data.servers || [];
+
+            // Przywróć zapisany wybór serwera
+            const savedServerId = await window.electronAPI?.getStore('selectedServerId');
+            if (savedServerId && state.servers.find(s => s.id === savedServerId)) {
+                state.selectedServerId = savedServerId;
             } else {
-                elements.serverStatusIndicator.className = 'status-indicator online';
-                state.serverOnline = true;
+                // Wybierz domyślny serwer
+                const defaultServer = state.servers.find(s => s.isDefault) || state.servers[0];
+                state.selectedServerId = defaultServer?.id || null;
             }
+
+            // Renderuj listę serwerów
+            renderServerList();
 
             // Wyświetl powiadomienia
             displayBroadcasts(response.data.broadcasts);
 
-            // Pobierz status serwera MC (ping, gracze)
-            loadServerStatus();
+            // Pobierz statusy serwerów
+            loadAllServerStatuses();
+
+            // Maintenance check
+            state.serverOnline = !config.maintenanceMode;
+            updateUserUI();
         }
     } catch (error) {
         console.error('Błąd ładowania konfiguracji:', error);
-        elements.serverAddress.textContent = 'Brak połączenia';
-        elements.serverStatusIndicator.className = 'status-indicator offline';
+        if (elements.serverList) {
+            elements.serverList.innerHTML = '<div class="server-list-empty">Brak połączenia z serwerem API</div>';
+        }
         state.serverOnline = false;
 
         showToast('Nie można połączyć z serwerem', 'error');
@@ -601,52 +631,137 @@ async function loadServerConfig() {
 }
 
 /**
- * Pobiera status serwera MC (ping, gracze online)
+ * Renderuje listę serwerów w UI
  */
-async function loadServerStatus() {
+function renderServerList() {
+    if (!elements.serverList) return;
+
+    if (state.servers.length === 0) {
+        elements.serverList.innerHTML = '<div class="server-list-empty">Brak dostępnych serwerów</div>';
+        return;
+    }
+
+    elements.serverList.innerHTML = state.servers.map(server => {
+        const isSelected = server.id === state.selectedServerId;
+        const status = state.serverStatuses[server.id];
+        const statusClass = status ? (status.online ? 'online' : 'offline') : 'checking';
+
+        // Formatuj ping
+        let pingText = '';
+        let pingClass = '';
+        if (status && status.online && status.latency) {
+            pingText = `${status.latency}ms`;
+            if (status.latency < 50) pingClass = 'good';
+            else if (status.latency < 150) pingClass = 'medium';
+            else pingClass = 'bad';
+        }
+
+        // Formatuj graczy
+        let playersText = '';
+        let playersClass = '';
+        if (status && status.online && status.players) {
+            playersText = `${status.players.online}/${status.players.max}`;
+            if (status.players.online > 0) playersClass = 'has-players';
+        } else if (status && !status.online) {
+            playersText = 'Offline';
+        } else {
+            playersText = '...';
+        }
+
+        return `
+            <div class="server-item ${isSelected ? 'selected' : ''}" data-server-id="${server.id}">
+                <div class="server-item-indicator ${statusClass}"></div>
+                <div class="server-item-info">
+                    <div class="server-item-name">
+                        ${escapeHtml(server.name)}
+                        ${server.isDefault ? '<span class="server-item-default-badge">Domyślny</span>' : ''}
+                    </div>
+                    <div class="server-item-address">${escapeHtml(server.ip)}:${server.port || 25565}</div>
+                    ${server.description ? `<div class="server-item-description">${escapeHtml(server.description)}</div>` : ''}
+                </div>
+                <div class="server-item-right">
+                    <span class="server-item-players ${playersClass}">${playersText}</span>
+                    ${pingText ? `<span class="server-item-ping ${pingClass}">${pingText}</span>` : ''}
+                </div>
+                <div class="server-item-selected-check">
+                    <svg class="server-item-check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // Dodaj event listenery
+    elements.serverList.querySelectorAll('.server-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const serverId = parseInt(item.dataset.serverId);
+            selectServer(serverId);
+        });
+    });
+}
+
+/**
+ * Wybiera serwer
+ */
+async function selectServer(serverId) {
+    state.selectedServerId = serverId;
+
+    // Zapisz wybór
+    await window.electronAPI?.setStore('selectedServerId', serverId);
+
+    // Zaktualizuj UI
+    renderServerList();
+
+    // Zaktualizuj stan online na podstawie wybranego serwera
+    const status = state.serverStatuses[serverId];
+    if (status) {
+        state.serverOnline = status.online && !state.config?.config?.maintenanceMode;
+    }
+    updateUserUI();
+}
+
+/**
+ * Pobiera statusy wszystkich serwerów
+ */
+async function loadAllServerStatuses() {
+    for (const server of state.servers) {
+        loadServerStatus(server.id);
+    }
+}
+
+/**
+ * Pobiera status konkretnego serwera MC
+ */
+async function loadServerStatus(serverId) {
     try {
-        const response = await api.getServerStatus();
+        const url = serverId ? `serverId=${serverId}` : '';
+        const response = await api.getServerStatus(url);
 
         if (response.success && response.data) {
             const data = response.data;
+            const id = serverId || 'default';
 
-            // Aktualizuj ping
-            if (elements.serverPing) {
-                const pingValue = elements.serverPing.querySelector('.ping-value');
-                if (data.online && data.latency) {
-                    pingValue.textContent = `${data.latency}ms`;
-                    elements.serverPing.classList.remove('offline');
-                    elements.serverPing.classList.add('online');
+            state.serverStatuses[id] = {
+                online: data.online,
+                players: data.players,
+                latency: data.latency,
+                version: data.version,
+                maintenanceMode: data.maintenanceMode
+            };
+
+            // Zaktualizuj rendering
+            renderServerList();
+
+            // Jeśli to wybrany serwer, zaktualizuj stan online
+            if (id === state.selectedServerId) {
+                if (data.maintenanceMode) {
+                    state.serverOnline = false;
                 } else {
-                    pingValue.textContent = '--';
-                    elements.serverPing.classList.remove('online');
-                    elements.serverPing.classList.add('offline');
+                    state.serverOnline = data.online;
                 }
+                updateUserUI();
             }
-
-            // Aktualizuj liczbę graczy
-            if (elements.playersOnline) {
-                if (data.online && data.players) {
-                    elements.playersOnline.textContent = `${data.players.online}/${data.players.max}`;
-                } else {
-                    elements.playersOnline.textContent = '0';
-                }
-            }
-
-            // Aktualizuj status serwera
-            if (data.maintenanceMode) {
-                elements.serverStatusIndicator.className = 'status-indicator maintenance';
-                state.serverOnline = false;
-            } else if (data.online) {
-                elements.serverStatusIndicator.className = 'status-indicator online';
-                state.serverOnline = true;
-            } else {
-                elements.serverStatusIndicator.className = 'status-indicator offline';
-                state.serverOnline = false;
-            }
-
-            // Aktualizuj przycisk graj
-            updateUserUI();
         }
     } catch (error) {
         console.error('Błąd pobierania statusu serwera:', error);
@@ -680,8 +795,13 @@ async function handlePlay() {
         return;
     }
 
+    if (!state.selectedServerId) {
+        showToast('Wybierz serwer z listy', 'warning');
+        return;
+    }
+
     if (!state.serverOnline) {
-        showToast('Serwer jest w trybie konserwacji', 'warning');
+        showToast('Serwer jest w trybie konserwacji lub niedostępny', 'warning');
         return;
     }
 
@@ -704,11 +824,15 @@ async function handlePlay() {
     elements.progressSpeed.textContent = '';
     if (elements.progressEta) elements.progressEta.textContent = '';
 
+    // Pobierz dane wybranego serwera
+    const selectedServer = state.servers.find(s => s.id === state.selectedServerId);
+
     try {
         await gameLauncher.launch(
             {
                 username: state.user.username,
-                token: state.token
+                token: state.token,
+                selectedServer: selectedServer
             },
             settings,
             {
@@ -1408,8 +1532,151 @@ async function handleRulesAccept() {
     }
 }
 
+// ============================================
+// AUTO-UPDATE
+// ============================================
+
+// Przechowywanie danych o dostępnej aktualizacji
+let pendingUpdate = null;
+
+/**
+ * Inicjalizuje system automatycznych aktualizacji
+ */
+function initAutoUpdate() {
+    // Zamykanie modalu aktualizacji
+    elements.updateModalClose?.addEventListener('click', () => closeModal('update'));
+    elements.btnUpdateLater?.addEventListener('click', () => closeModal('update'));
+    elements.updateModal?.addEventListener('click', (e) => {
+        if (e.target === elements.updateModal) closeModal('update');
+    });
+
+    // Przycisk aktualizacji
+    elements.btnUpdateNow?.addEventListener('click', handleDownloadUpdate);
+    elements.btnUpdateInstall?.addEventListener('click', handleInstallUpdate);
+
+    // Nasłuchuj eventów z main process
+    window.electronAPI?.onUpdateAvailable((data) => {
+        console.log('Update available:', data);
+        pendingUpdate = data;
+        showUpdateModal(data);
+    });
+
+    window.electronAPI?.onUpdateDownloadProgress((data) => {
+        if (elements.updateProgressFill) {
+            elements.updateProgressFill.style.width = `${data.percent}%`;
+        }
+        if (elements.updateProgressPercent) {
+            elements.updateProgressPercent.textContent = `${data.percent}%`;
+        }
+        if (elements.updateProgressText) {
+            elements.updateProgressText.textContent = data.status || 'Pobieranie...';
+        }
+    });
+
+    window.electronAPI?.onUpdateDownloaded((data) => {
+        // Pokaż przycisk instalacji
+        if (elements.updateProgress) elements.updateProgress.style.display = 'none';
+        if (elements.updateFooter) elements.updateFooter.style.display = 'none';
+        if (elements.updateInstallFooter) elements.updateInstallFooter.style.display = 'flex';
+        showToast('Aktualizacja pobrana! Kliknij aby zainstalować.', 'success');
+    });
+
+    window.electronAPI?.onUpdateError((data) => {
+        if (elements.updateProgress) elements.updateProgress.style.display = 'none';
+        if (elements.updateFooter) elements.updateFooter.style.display = 'flex';
+        if (elements.btnUpdateNow) {
+            elements.btnUpdateNow.disabled = false;
+            elements.btnUpdateNow.textContent = 'Spróbuj ponownie';
+        }
+        showToast(`Błąd aktualizacji: ${data.error}`, 'error');
+    });
+}
+
+/**
+ * Wyświetla modal z informacją o dostępnej aktualizacji
+ */
+function showUpdateModal(data) {
+    if (elements.updateCurrentVersion) {
+        elements.updateCurrentVersion.textContent = data.currentVersion || '?';
+    }
+    if (elements.updateNewVersion) {
+        elements.updateNewVersion.textContent = data.latestVersion || '?';
+    }
+
+    // Changelog
+    if (elements.updateChangelog && data.changelog) {
+        elements.updateChangelog.innerHTML = `<p>${escapeHtml(data.changelog)}</p>`;
+        elements.updateChangelog.style.display = 'block';
+    } else if (elements.updateChangelog) {
+        elements.updateChangelog.style.display = 'none';
+    }
+
+    // Reset UI
+    if (elements.updateProgress) elements.updateProgress.style.display = 'none';
+    if (elements.updateFooter) elements.updateFooter.style.display = 'flex';
+    if (elements.updateInstallFooter) elements.updateInstallFooter.style.display = 'none';
+    if (elements.btnUpdateNow) {
+        elements.btnUpdateNow.disabled = false;
+        elements.btnUpdateNow.textContent = 'Aktualizuj teraz';
+    }
+
+    // Jeśli aktualizacja jest wymagana, ukryj przycisk "później"
+    if (data.isRequired && elements.btnUpdateLater) {
+        elements.btnUpdateLater.style.display = 'none';
+    }
+
+    openModal('update');
+}
+
+/**
+ * Obsługuje pobieranie aktualizacji
+ */
+async function handleDownloadUpdate() {
+    if (!pendingUpdate) return;
+
+    // Pokaż progress
+    if (elements.updateProgress) elements.updateProgress.style.display = 'block';
+    if (elements.updateFooter) elements.updateFooter.style.display = 'none';
+    if (elements.btnUpdateNow) {
+        elements.btnUpdateNow.disabled = true;
+        elements.btnUpdateNow.textContent = 'Pobieranie...';
+    }
+
+    // Reset progress
+    if (elements.updateProgressFill) elements.updateProgressFill.style.width = '0%';
+    if (elements.updateProgressPercent) elements.updateProgressPercent.textContent = '0%';
+
+    try {
+        await window.electronAPI?.downloadUpdate({
+            downloadUrl: pendingUpdate.downloadUrl,
+            sha256: pendingUpdate.sha256,
+            version: pendingUpdate.latestVersion
+        });
+    } catch (error) {
+        showToast('Błąd pobierania aktualizacji', 'error');
+        if (elements.updateProgress) elements.updateProgress.style.display = 'none';
+        if (elements.updateFooter) elements.updateFooter.style.display = 'flex';
+        if (elements.btnUpdateNow) {
+            elements.btnUpdateNow.disabled = false;
+            elements.btnUpdateNow.textContent = 'Spróbuj ponownie';
+        }
+    }
+}
+
+/**
+ * Obsługuje instalację pobranej aktualizacji
+ */
+function handleInstallUpdate() {
+    window.electronAPI?.installUpdate();
+}
+
 // Odświeżaj konfigurację co 5 minut
 setInterval(loadServerConfig, 5 * 60 * 1000);
 
-// Odświeżaj status serwera MC co 30 sekund
-setInterval(loadServerStatus, 30 * 1000);
+// Odświeżaj statusy serwerów co 30 sekund
+setInterval(loadAllServerStatuses, 30 * 1000);
+
+// Sprawdzaj aktualizacje co godzinę
+setInterval(() => {
+    window.electronAPI?.checkForUpdates();
+}, 60 * 60 * 1000);

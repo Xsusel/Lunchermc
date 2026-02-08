@@ -18,7 +18,7 @@ import { apiLimiter, errorHandler, notFoundHandler } from './middleware/index.js
 import { ensureDir, getUploadsPath, getModsPath } from './utils/helpers.js';
 import { startAutoBackup, stopAutoBackup } from './utils/backup.js';
 import wsManager from './utils/wsManager.js';
-import { ScheduledMaintenance } from './models/index.js';
+import { ScheduledMaintenance, Server } from './models/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,6 +77,10 @@ ensureDir(path.join(getUploadsPath(), 'resourcepacks'));
 ensureDir(path.join(getUploadsPath(), 'shaderpacks'));
 ensureDir(path.join(getUploadsPath(), 'configs'));
 ensureDir(path.join(__dirname, '../data'));
+
+// Inicjalizacja tabeli serwerów (auto-tworzenie + migracja)
+Server.initTable();
+Server.migrateFromGameConfig();
 
 // ============================================
 // TRASY API

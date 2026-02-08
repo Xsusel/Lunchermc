@@ -14,6 +14,7 @@ import ConfigPage from './pages/ConfigPage';
 import BroadcastsPage from './pages/BroadcastsPage';
 import LogsPage from './pages/LogsPage';
 import SystemPage from './pages/SystemPage';
+import LauncherVersionsPage from './pages/LauncherVersionsPage';
 
 // Komponenty
 import Layout from './components/Layout';
@@ -74,6 +75,7 @@ function App() {
                 <Route path="config" element={<ConfigPage />} />
                 <Route path="broadcasts" element={<BroadcastsPage />} />
                 <Route path="logs" element={<LogsPage />} />
+                <Route path="launcher-versions" element={<LauncherVersionsPage />} />
                 <Route path="system" element={<SystemPage />} />
             </Route>
 
