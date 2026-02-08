@@ -3,16 +3,15 @@
  * Endpointy używane przez klienta launchera
  */
 import { Router } from 'express';
-import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog, ServerRules, News } from '../models/index.js';
+import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog, ServerRules, News, Server } from '../models/index.js';
 import { authenticateUser, optionalAuth } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getClientIp } from '../utils/helpers.js';
 import { pingMinecraftServer, simplePing } from '../utils/mcPing.js';
 import db from '../config/database.js';
 
-// Cache dla statusu serwera (odswiezany co 30 sekund)
-let serverStatusCache = null;
-let serverStatusCacheTime = 0;
+// Cache dla statusu serwerów (odswiezany co 30 sekund)
+const serverStatusCaches = {};
 const CACHE_TTL = 30000; // 30 sekund
 
 const router = Router();
@@ -56,16 +55,20 @@ router.get('/config', asyncHandler(async (req, res) => {
         }))
     ];
 
+    // Pobierz listę serwerów
+    const servers = Server.getForLauncher();
+
     res.json({
         success: true,
         data: {
             config,
+            servers,
             mods, // Zachowujemy dla kompatybilności wstecznej
             files, // Nowa zunifikowana lista
             broadcasts,
             // Metadane dla launchera
             meta: {
-                apiVersion: '1.0.0',
+                apiVersion: '1.1.0',
                 timestamp: new Date().toISOString()
             }
         }
@@ -141,15 +144,34 @@ router.post('/game-start',
  */
 router.get('/server-status', asyncHandler(async (req, res) => {
     const config = GameConfig.getPublicConfig();
+    const serverId = req.query.serverId ? parseInt(req.query.serverId) : null;
     const now = Date.now();
 
+    // Określ IP i port serwera do pingowania
+    let targetIp = config.serverIp;
+    let targetPort = config.serverPort;
+    let serverName = null;
+
+    if (serverId) {
+        const server = Server.getById(serverId);
+        if (server && server.is_enabled) {
+            targetIp = server.ip;
+            targetPort = server.port;
+            serverName = server.name;
+        }
+    }
+
+    const cacheKey = `${targetIp}:${targetPort}`;
+
     // Sprawdz cache
-    if (serverStatusCache && (now - serverStatusCacheTime) < CACHE_TTL) {
+    if (serverStatusCaches[cacheKey] && (now - serverStatusCaches[cacheKey].time) < CACHE_TTL) {
         return res.json({
             success: true,
             data: {
-                ...serverStatusCache,
+                ...serverStatusCaches[cacheKey].data,
                 cached: true,
+                serverId: serverId,
+                serverName: serverName,
                 maintenanceMode: config.maintenanceMode,
                 maintenanceMessage: config.maintenanceMessage
             }
@@ -158,8 +180,8 @@ router.get('/server-status', asyncHandler(async (req, res) => {
 
     // Ping serwera MC
     let serverData = {
-        ip: config.serverIp,
-        port: config.serverPort,
+        ip: targetIp,
+        port: targetPort,
         online: false,
         players: { online: 0, max: 0, sample: [] },
         version: null,
@@ -168,17 +190,17 @@ router.get('/server-status', asyncHandler(async (req, res) => {
     };
 
     try {
-        if (config.serverIp && !config.maintenanceMode) {
+        if (targetIp && !config.maintenanceMode) {
             const pingResult = await pingMinecraftServer(
-                config.serverIp,
-                config.serverPort || 25565,
+                targetIp,
+                targetPort || 25565,
                 5000
             );
 
             if (pingResult.online) {
                 serverData = {
-                    ip: config.serverIp,
-                    port: config.serverPort,
+                    ip: targetIp,
+                    port: targetPort,
                     online: true,
                     players: pingResult.players || { online: 0, max: 0, sample: [] },
                     version: pingResult.version,
@@ -192,14 +214,15 @@ router.get('/server-status', asyncHandler(async (req, res) => {
     }
 
     // Zapisz do cache
-    serverStatusCache = serverData;
-    serverStatusCacheTime = now;
+    serverStatusCaches[cacheKey] = { data: serverData, time: now };
 
     res.json({
         success: true,
         data: {
             ...serverData,
             cached: false,
+            serverId: serverId,
+            serverName: serverName,
             maintenanceMode: config.maintenanceMode,
             maintenanceMessage: config.maintenanceMessage
         }

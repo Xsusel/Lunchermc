@@ -3,10 +3,11 @@
  */
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { configApi } from '../api/client';
+import { configApi, serversApi } from '../api/client';
 import {
     Settings, Server, Cpu, Save, AlertTriangle,
-    Loader2, RefreshCw, Gamepad2
+    Loader2, RefreshCw, Gamepad2, Plus, Trash2, Edit3,
+    GripVertical, Power, Star, X
 } from 'lucide-react';
 
 // Dostępne wersje Minecraft (można rozbudować o pobieranie z API)
@@ -32,7 +33,17 @@ function ConfigPage() {
     const [saving, setSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(false);
 
-    // Formularz
+    // Serwery
+    const [servers, setServers] = useState([]);
+    const [loadingServers, setLoadingServers] = useState(true);
+    const [showServerModal, setShowServerModal] = useState(false);
+    const [editingServer, setEditingServer] = useState(null);
+    const [serverForm, setServerForm] = useState({
+        name: '', description: '', ip: '', port: 25565, is_default: false
+    });
+    const [savingServer, setSavingServer] = useState(false);
+
+    // Formularz konfiguracji
     const [form, setForm] = useState({
         game_version: '',
         loader_type: 'vanilla',
@@ -47,6 +58,7 @@ function ConfigPage() {
 
     useEffect(() => {
         loadConfig();
+        loadServers();
     }, []);
 
     const loadConfig = async () => {
@@ -71,6 +83,20 @@ function ConfigPage() {
             toast.error('Błąd ładowania konfiguracji');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const loadServers = async () => {
+        try {
+            setLoadingServers(true);
+            const response = await serversApi.getAll();
+            if (response.success) {
+                setServers(response.data);
+            }
+        } catch (error) {
+            toast.error('Błąd ładowania serwerów');
+        } finally {
+            setLoadingServers(false);
         }
     };
 
@@ -108,6 +134,84 @@ function ConfigPage() {
         }
     };
 
+    // === Zarządzanie serwerami ===
+
+    const openAddServerModal = () => {
+        setEditingServer(null);
+        setServerForm({ name: '', description: '', ip: '', port: 25565, is_default: false });
+        setShowServerModal(true);
+    };
+
+    const openEditServerModal = (server) => {
+        setEditingServer(server);
+        setServerForm({
+            name: server.name,
+            description: server.description || '',
+            ip: server.ip,
+            port: server.port || 25565,
+            is_default: !!server.is_default
+        });
+        setShowServerModal(true);
+    };
+
+    const handleServerFormChange = (field, value) => {
+        setServerForm(prev => ({ ...prev, [field]: value }));
+    };
+
+    const handleSaveServer = async () => {
+        if (!serverForm.name.trim() || !serverForm.ip.trim()) {
+            toast.error('Nazwa i adres IP są wymagane');
+            return;
+        }
+        setSavingServer(true);
+        try {
+            if (editingServer) {
+                await serversApi.update(editingServer.id, serverForm);
+                toast.success('Serwer zaktualizowany');
+            } else {
+                await serversApi.create(serverForm);
+                toast.success('Serwer dodany');
+            }
+            setShowServerModal(false);
+            loadServers();
+        } catch (error) {
+            toast.error('Błąd zapisywania serwera');
+        } finally {
+            setSavingServer(false);
+        }
+    };
+
+    const handleDeleteServer = async (server) => {
+        if (!confirm(`Czy na pewno chcesz usunąć serwer "${server.name}"?`)) return;
+        try {
+            await serversApi.delete(server.id);
+            toast.success('Serwer usunięty');
+            loadServers();
+        } catch (error) {
+            toast.error('Błąd usuwania serwera');
+        }
+    };
+
+    const handleToggleServer = async (server) => {
+        try {
+            await serversApi.toggle(server.id);
+            toast.success(server.is_enabled ? 'Serwer wyłączony' : 'Serwer włączony');
+            loadServers();
+        } catch (error) {
+            toast.error('Błąd zmiany statusu serwera');
+        }
+    };
+
+    const handleSetDefault = async (server) => {
+        try {
+            await serversApi.update(server.id, { is_default: true });
+            toast.success(`${server.name} ustawiony jako domyślny`);
+            loadServers();
+        } catch (error) {
+            toast.error('Błąd ustawiania domyślnego serwera');
+        }
+    };
+
     if (loading) {
         return (
             <div className="flex items-center justify-center h-64">
@@ -125,12 +229,12 @@ function ConfigPage() {
                         <Settings className="w-7 h-7 text-mc-green" />
                         Konfiguracja Gry
                     </h1>
-                    <p className="text-gray-400">Ustawienia wersji gry i serwera</p>
+                    <p className="text-gray-400">Ustawienia wersji gry, serwerów i parametrów</p>
                 </div>
 
                 <div className="flex gap-2">
                     <button
-                        onClick={loadConfig}
+                        onClick={() => { loadConfig(); loadServers(); }}
                         className="btn btn-secondary"
                         disabled={loading}
                     >
@@ -157,6 +261,213 @@ function ConfigPage() {
                 <div className="card bg-yellow-900/20 border-yellow-800 flex items-center gap-3">
                     <AlertTriangle className="w-5 h-5 text-yellow-500" />
                     <p className="text-yellow-300 text-sm">Masz niezapisane zmiany</p>
+                </div>
+            )}
+
+            {/* ============ SERWERY ============ */}
+            <div className="card">
+                <div className="card-header flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <Server className="w-5 h-5 text-mc-green" />
+                        Serwery Minecraft
+                    </div>
+                    <button onClick={openAddServerModal} className="btn btn-primary btn-sm">
+                        <Plus className="w-4 h-4" />
+                        Dodaj serwer
+                    </button>
+                </div>
+
+                {loadingServers ? (
+                    <div className="flex items-center justify-center py-8">
+                        <div className="loader" />
+                    </div>
+                ) : servers.length === 0 ? (
+                    <div className="text-center py-8">
+                        <Server className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+                        <p className="text-gray-400">Brak serwerów</p>
+                        <p className="text-gray-500 text-sm mt-1">Dodaj pierwszy serwer, który pojawi się w launcherze</p>
+                    </div>
+                ) : (
+                    <div className="space-y-3">
+                        {servers.map((server) => (
+                            <div
+                                key={server.id}
+                                className={`flex items-center gap-4 p-4 rounded-lg border transition-colors ${
+                                    server.is_enabled
+                                        ? server.is_default
+                                            ? 'border-mc-accent bg-mc-accent/5'
+                                            : 'border-mc-gray bg-mc-darker'
+                                        : 'border-mc-gray bg-mc-darker opacity-50'
+                                }`}
+                            >
+                                <GripVertical className="w-5 h-5 text-gray-600 cursor-grab flex-shrink-0" />
+
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                        <p className="font-medium text-white truncate">{server.name}</p>
+                                        {!!server.is_default && (
+                                            <span className="px-2 py-0.5 text-xs font-medium bg-mc-accent/20 text-mc-accent rounded">
+                                                Domyślny
+                                            </span>
+                                        )}
+                                        {!server.is_enabled && (
+                                            <span className="px-2 py-0.5 text-xs font-medium bg-red-900/30 text-red-400 rounded">
+                                                Wyłączony
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-sm text-gray-400 font-mono">
+                                        {server.ip}:{server.port || 25565}
+                                    </p>
+                                    {server.description && (
+                                        <p className="text-xs text-gray-500 mt-1 truncate">{server.description}</p>
+                                    )}
+                                </div>
+
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                    {!server.is_default && server.is_enabled && (
+                                        <button
+                                            onClick={() => handleSetDefault(server)}
+                                            className="p-2 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-yellow-400 transition-colors"
+                                            title="Ustaw jako domyślny"
+                                        >
+                                            <Star className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => handleToggleServer(server)}
+                                        className={`p-2 rounded-lg hover:bg-mc-gray transition-colors ${
+                                            server.is_enabled ? 'text-green-400 hover:text-red-400' : 'text-gray-500 hover:text-green-400'
+                                        }`}
+                                        title={server.is_enabled ? 'Wyłącz' : 'Włącz'}
+                                    >
+                                        <Power className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => openEditServerModal(server)}
+                                        className="p-2 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-blue-400 transition-colors"
+                                        title="Edytuj"
+                                    >
+                                        <Edit3 className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteServer(server)}
+                                        className="p-2 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-red-400 transition-colors"
+                                        title="Usuń"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Modal dodawania/edycji serwera */}
+            {showServerModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+                    <div className="card w-full max-w-md mx-4 relative">
+                        <button
+                            onClick={() => setShowServerModal(false)}
+                            className="absolute top-4 right-4 p-1 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-white transition-colors"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+
+                        <h3 className="text-lg font-bold text-white mb-4">
+                            {editingServer ? 'Edytuj serwer' : 'Dodaj serwer'}
+                        </h3>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="label">Nazwa serwera</label>
+                                <input
+                                    type="text"
+                                    value={serverForm.name}
+                                    onChange={(e) => handleServerFormChange('name', e.target.value)}
+                                    className="input"
+                                    placeholder="np. Survival, Creative, SkyBlock"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="label">Opis (opcjonalnie)</label>
+                                <input
+                                    type="text"
+                                    value={serverForm.description}
+                                    onChange={(e) => handleServerFormChange('description', e.target.value)}
+                                    className="input"
+                                    placeholder="Krótki opis serwera"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-3">
+                                <div className="col-span-2">
+                                    <label className="label">Adres IP</label>
+                                    <input
+                                        type="text"
+                                        value={serverForm.ip}
+                                        onChange={(e) => handleServerFormChange('ip', e.target.value)}
+                                        className="input"
+                                        placeholder="play.serwer.pl"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="label">Port</label>
+                                    <input
+                                        type="number"
+                                        value={serverForm.port}
+                                        onChange={(e) => handleServerFormChange('port', parseInt(e.target.value) || 25565)}
+                                        className="input"
+                                        min={1}
+                                        max={65535}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-3 p-3 rounded-lg bg-mc-darker border border-mc-gray">
+                                <input
+                                    type="checkbox"
+                                    id="server-default"
+                                    checked={serverForm.is_default}
+                                    onChange={(e) => handleServerFormChange('is_default', e.target.checked)}
+                                    className="accent-mc-accent"
+                                />
+                                <label htmlFor="server-default" className="text-sm text-gray-300 cursor-pointer">
+                                    Ustaw jako serwer domyślny
+                                </label>
+                            </div>
+
+                            <div className="p-3 bg-mc-darker rounded-lg">
+                                <p className="text-sm text-gray-400">Podgląd adresu:</p>
+                                <p className="font-mono text-white">
+                                    {serverForm.ip || 'localhost'}:{serverForm.port || 25565}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 mt-6">
+                            <button
+                                onClick={() => setShowServerModal(false)}
+                                className="btn btn-secondary flex-1"
+                            >
+                                Anuluj
+                            </button>
+                            <button
+                                onClick={handleSaveServer}
+                                className="btn btn-primary flex-1"
+                                disabled={savingServer}
+                            >
+                                {savingServer ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Save className="w-4 h-4" />
+                                )}
+                                {editingServer ? 'Zapisz' : 'Dodaj'}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -242,46 +553,6 @@ function ConfigPage() {
                     </div>
                 </div>
 
-                {/* Serwer */}
-                <div className="card">
-                    <div className="card-header">
-                        <Server className="w-5 h-5 text-mc-green" />
-                        Serwer Minecraft
-                    </div>
-
-                    <div className="space-y-4">
-                        <div>
-                            <label className="label">Adres IP serwera</label>
-                            <input
-                                type="text"
-                                value={form.server_ip}
-                                onChange={(e) => handleChange('server_ip', e.target.value)}
-                                className="input"
-                                placeholder="play.serwer.pl"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="label">Port</label>
-                            <input
-                                type="number"
-                                value={form.server_port}
-                                onChange={(e) => handleChange('server_port', parseInt(e.target.value) || 25565)}
-                                className="input"
-                                min={1}
-                                max={65535}
-                            />
-                        </div>
-
-                        <div className="p-4 bg-mc-darker rounded-lg">
-                            <p className="text-sm text-gray-400">Pełny adres serwera:</p>
-                            <p className="font-mono text-white">
-                                {form.server_ip || 'localhost'}:{form.server_port || 25565}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-
                 {/* Parametry JVM */}
                 <div className="card">
                     <div className="card-header">
@@ -313,7 +584,7 @@ function ConfigPage() {
                 </div>
 
                 {/* Tryb konserwacji */}
-                <div className="card">
+                <div className="card lg:col-span-2">
                     <div className="card-header">
                         <AlertTriangle className="w-5 h-5 text-yellow-500" />
                         Tryb Konserwacji

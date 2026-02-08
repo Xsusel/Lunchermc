@@ -134,6 +134,44 @@ export const configApi = {
     }
 };
 
+export const serversApi = {
+    // Lista serwerów
+    getAll: async () => {
+        const response = await api.get('/admin/servers');
+        return response.data;
+    },
+
+    // Dodawanie serwera
+    create: async (data) => {
+        const response = await api.post('/admin/servers', data);
+        return response.data;
+    },
+
+    // Aktualizacja serwera
+    update: async (id, data) => {
+        const response = await api.put(`/admin/servers/${id}`, data);
+        return response.data;
+    },
+
+    // Usuwanie serwera
+    delete: async (id) => {
+        const response = await api.delete(`/admin/servers/${id}`);
+        return response.data;
+    },
+
+    // Przełączanie statusu
+    toggle: async (id) => {
+        const response = await api.post(`/admin/servers/${id}/toggle`);
+        return response.data;
+    },
+
+    // Zmiana kolejności
+    reorder: async (ids) => {
+        const response = await api.post('/admin/servers/reorder', { ids });
+        return response.data;
+    }
+};
+
 export const modsApi = {
     // Lista modów
     getAll: async () => {

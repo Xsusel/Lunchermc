@@ -15,3 +15,4 @@ export { default as Session } from './Session.js';
 export { default as Ban } from './Ban.js';
 export { default as ServerRules } from './ServerRules.js';
 export { default as News } from './News.js';
+export { default as Server } from './Server.js';

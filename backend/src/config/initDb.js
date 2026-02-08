@@ -140,6 +140,22 @@ db.exec(`
     )
 `);
 
+// Tabela serwerów (wiele serwerów do wyboru w launcherze)
+db.exec(`
+    CREATE TABLE IF NOT EXISTS servers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        ip TEXT NOT NULL,
+        port INTEGER DEFAULT 25565,
+        is_default INTEGER DEFAULT 0,
+        is_enabled INTEGER DEFAULT 1,
+        display_order INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+
 // ============================================
 // TWORZENIE INDEKSÓW
 // ============================================
@@ -150,6 +166,8 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_mods_enabled ON mods(is_enabled);
     CREATE INDEX IF NOT EXISTS idx_broadcasts_active ON broadcasts(is_active);
+    CREATE INDEX IF NOT EXISTS idx_servers_enabled ON servers(is_enabled);
+    CREATE INDEX IF NOT EXISTS idx_servers_order ON servers(display_order);
 `);
 
 // ============================================
@@ -183,6 +201,19 @@ if (adminExists.count === 0) {
 
     console.log(`✅ Utworzono konto administratora: ${adminUsername}`);
     console.log('⚠️  ZMIEŃ DOMYŚLNE HASŁO ADMINISTRATORA!');
+}
+
+// Migracja: przenieś serwer z game_config do tabeli servers
+const serversExist = db.prepare('SELECT COUNT(*) as count FROM servers').get();
+if (serversExist.count === 0) {
+    const gameConfig = db.prepare('SELECT server_ip, server_port FROM game_config WHERE id = 1').get();
+    if (gameConfig && gameConfig.server_ip) {
+        db.prepare(`
+            INSERT INTO servers (name, ip, port, is_default, is_enabled, display_order)
+            VALUES (?, ?, ?, 1, 1, 0)
+        `).run('Serwer Xsus', gameConfig.server_ip, gameConfig.server_port || 25565);
+        console.log('✅ Zmigrowano serwer z game_config do tabeli servers');
+    }
 }
 
 console.log('✅ Baza danych została zainicjalizowana pomyślnie!');
