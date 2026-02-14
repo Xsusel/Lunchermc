@@ -3,8 +3,12 @@
   "productName": "XsusLauncher",
   "version": "1.0.0",
   "description": "Profesjonalny launcher Minecraft dla serwera Xsus",
+  "homepage": "https://mc.xsus.pl",
   "main": "src/main/index.js",
-  "author": "Xsus",
+  "author": {
+    "name": "Xsus",
+    "email": "admin@xsus.pl"
+  },
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -74,7 +78,8 @@
     "linux": {
       "target": ["AppImage", "deb"],
       "icon": "assets/icon.png",
-      "category": "Game"
+      "category": "Game",
+      "maintainer": "Xsus <admin@xsus.pl>"
     },
     "mac": {
       "target": ["dmg"],
