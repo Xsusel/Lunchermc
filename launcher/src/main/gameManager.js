@@ -383,6 +383,7 @@ class GameManager {
                 let lastProgressTime = Date.now();
                 let lastProgressSave = 0;
                 let totalSize = 0;
+                let retried = false; // Guard: zapobiega podwójnemu retry
 
                 const cleanup = (removeFile = true) => {
                     try {
@@ -397,6 +398,14 @@ class GameManager {
                 };
 
                 const retryOrFail = (error) => {
+                    // Guard: wywołaj tylko raz per attempt
+                    if (retried) return;
+                    retried = true;
+
+                    // Wyczyść stall check i request
+                    clearInterval(stallCheck);
+                    try { request.destroy(); } catch (e) {}
+
                     cleanup(false); // Nie usuwaj pliku - może być wznowiony
                     // Zapisz postęp przed retry
                     saveProgress(downloadedBytes, totalSize, attempt);
@@ -455,7 +464,7 @@ class GameManager {
                         downloadedBytes += chunk.length;
                         lastProgressTime = Date.now();
                         if (onProgress && totalSize > 0) {
-                            onProgress(downloadedBytes, totalSize);
+                            try { onProgress(downloadedBytes, totalSize); } catch (e) {}
                         }
 
                         // Zapisuj progress co 5 sekund (nie za często, żeby nie obciążać dysku)
@@ -508,24 +517,19 @@ class GameManager {
 
                 request.on('error', (err) => retryOrFail(err));
 
-                // Timeout - 30 sekund na nawiązanie połączenia
-                request.setTimeout(30000, () => {
-                    request.destroy();
+                // Timeout - 60 sekund
+                request.setTimeout(60000, () => {
                     retryOrFail(new Error('Download timeout'));
                 });
 
                 // Sprawdź czy pobieranie się nie zawiesiło
-                // (30s bez danych jeśli coś przyszło, 15s jeśli nic nie przyszło)
-                const stallCheck = setInterval(() => {
+                // (30s bez danych jeśli coś przyszło, 20s jeśli nic nie przyszło)
+                // retryOrFail ma guard - bezpieczne wywoływanie z wielu źródeł
+                let stallCheck = setInterval(() => {
                     const timeSinceProgress = Date.now() - lastProgressTime;
                     if (downloadedBytes > startByte && timeSinceProgress > 30000) {
-                        clearInterval(stallCheck);
-                        request.destroy();
                         retryOrFail(new Error('Download stalled'));
-                    } else if (downloadedBytes === startByte && timeSinceProgress > 15000) {
-                        // Serwer nie wysłał żadnych danych - nie czekaj 2 min
-                        clearInterval(stallCheck);
-                        request.destroy();
+                    } else if (downloadedBytes === startByte && timeSinceProgress > 20000) {
                         retryOrFail(new Error('No data received'));
                     }
                 }, 5000);
@@ -1456,7 +1460,7 @@ class GameManager {
                         downloadedBytes += chunk.length;
                         lastProgressTime = Date.now();
                         if (onProgress && totalSize > 0) {
-                            onProgress(downloadedBytes, totalSize);
+                            try { onProgress(downloadedBytes, totalSize); } catch (e) {}
                         }
                     });
 
@@ -1780,65 +1784,69 @@ class GameManager {
                 activeDownloads++;
 
                 (async () => {
-                    let success = false;
-                    let lastError = null;
+                    try {
+                        let success = false;
+                        let lastError = null;
 
-                    for (let retry = 0; retry < MAX_RETRIES_PER_FILE && !success; retry++) {
-                        try {
-                            this.sendThrottledProgress('download-progress', {
-                                type: 'file',
-                                name: file.fileName,
-                                current: downloadedCount + 1,
-                                total: filesToDownload.length,
-                                status: 'downloading',
-                                retry: retry > 0 ? retry : undefined
-                            });
-
-                            await this.downloadAndVerifyFile(file, file.destPath, (bytes, total) => {
-                                // Używamy throttled progress dla mniejszego obciążenia CPU
+                        for (let retry = 0; retry < MAX_RETRIES_PER_FILE && !success; retry++) {
+                            try {
                                 this.sendThrottledProgress('download-progress', {
                                     type: 'file',
                                     name: file.fileName,
                                     current: downloadedCount + 1,
                                     total: filesToDownload.length,
                                     status: 'downloading',
-                                    bytes,
-                                    totalBytes: total,
-                                    percent: Math.round(((downloadedCount + (bytes / total)) / filesToDownload.length) * 100)
+                                    retry: retry > 0 ? retry : undefined
                                 });
-                            });
 
-                            success = true;
-                            downloadedCount++;
-                            results.downloaded.push(file.fileName);
-                            console.log(`[OK] ${file.fileName} (${downloadedCount}/${filesToDownload.length})`);
+                                await this.downloadAndVerifyFile(file, file.destPath, (bytes, total) => {
+                                    this.sendThrottledProgress('download-progress', {
+                                        type: 'file',
+                                        name: file.fileName,
+                                        current: downloadedCount + 1,
+                                        total: filesToDownload.length,
+                                        status: 'downloading',
+                                        bytes,
+                                        totalBytes: total,
+                                        percent: Math.round(((downloadedCount + (bytes / total)) / filesToDownload.length) * 100)
+                                    });
+                                });
 
-                        } catch (error) {
-                            lastError = error;
-                            console.log(`[FAIL] ${file.fileName} attempt ${retry + 1}: ${error.message}`);
+                                success = true;
+                                downloadedCount++;
+                                results.downloaded.push(file.fileName);
+                                console.log(`[OK] ${file.fileName} (${downloadedCount}/${filesToDownload.length})`);
 
-                            if (retry < MAX_RETRIES_PER_FILE - 1) {
-                                await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
+                            } catch (error) {
+                                lastError = error;
+                                console.log(`[FAIL] ${file.fileName} attempt ${retry + 1}: ${error.message}`);
+
+                                if (retry < MAX_RETRIES_PER_FILE - 1) {
+                                    await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
+                                }
                             }
                         }
+
+                        if (!success) {
+                            results.errors.push({ filename: file.fileName, error: lastError?.message || 'Unknown error' });
+                            failedFiles.push(file);
+                            console.error(`[FAILED] ${file.fileName} after ${MAX_RETRIES_PER_FILE} attempts`);
+                        }
+                    } catch (unexpectedErr) {
+                        // Zabezpieczenie: nigdy nie blokuj kolejki
+                        console.error(`[FATAL] ${file.fileName}: ${unexpectedErr.message}`);
+                        results.errors.push({ filename: file.fileName, error: unexpectedErr.message });
+                    } finally {
+                        // ZAWSZE dekrementuj i kontynuuj - nawet przy nieoczekiwanym błędzie
+                        activeDownloads--;
+
+                        const totalProgress = downloadedCount + results.errors.length;
+                        this.sendToRenderer('game-status', {
+                            status: `Pobieranie... (${totalProgress}/${filesToDownload.length})${results.errors.length > 0 ? ` - ${results.errors.length} błędów` : ''}`
+                        });
+
+                        downloadNext();
                     }
-
-                    if (!success) {
-                        results.errors.push({ filename: file.fileName, error: lastError?.message || 'Unknown error' });
-                        failedFiles.push(file);
-                        console.error(`[FAILED] ${file.fileName} after ${MAX_RETRIES_PER_FILE} attempts`);
-                    }
-
-                    activeDownloads--;
-
-                    // Aktualizuj status
-                    const totalProgress = downloadedCount + results.errors.length;
-                    this.sendToRenderer('game-status', {
-                        status: `Pobieranie... (${totalProgress}/${filesToDownload.length})${results.errors.length > 0 ? ` - ${results.errors.length} błędów` : ''}`
-                    });
-
-                    // Kontynuuj pobieranie następnych
-                    downloadNext();
                 })();
             }
         };
