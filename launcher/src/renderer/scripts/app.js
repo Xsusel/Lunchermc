@@ -20,7 +20,8 @@ const state = {
     selectedServerId: null,
     serverStatuses: {},
     isOffline: false,
-    captchaId: null
+    captchaId: null,
+    isPlaying: false
 };
 
 // ============================================
@@ -623,11 +624,16 @@ function updateUserUI() {
         elements.userName.textContent = state.user.username;
         elements.userStatus.textContent = 'Kliknij aby się wylogować';
         elements.userAvatar.textContent = state.user.username[0].toUpperCase();
-        elements.btnPlay.disabled = !state.serverOnline;
 
-        if (state.serverOnline) {
+        // Nie odblokuj przycisku jeśli trwa pobieranie/uruchamianie
+        if (state.isPlaying) {
+            elements.btnPlay.disabled = true;
+            elements.playSubtext.textContent = 'Pobieranie plików...';
+        } else if (state.serverOnline) {
+            elements.btnPlay.disabled = false;
             elements.playSubtext.textContent = 'Kliknij aby rozpocząć';
         } else {
+            elements.btnPlay.disabled = true;
             elements.playSubtext.textContent = 'Serwer niedostępny';
         }
     } else {
@@ -941,7 +947,8 @@ async function handlePlay() {
     // Pobierz ustawienia
     const settings = await getSettings();
 
-    // Pokaż progress
+    // Pokaż progress i zablokuj przycisk
+    state.isPlaying = true;
     elements.progressContainer.style.display = 'block';
     elements.btnPlay.disabled = true;
 
@@ -986,11 +993,13 @@ async function handlePlay() {
                     elements.progressText.textContent = status;
                 },
                 onComplete: (result) => {
+                    state.isPlaying = false;
                     showToast('Łączenie z serwerem...', 'success');
                     elements.progressContainer.style.display = 'none';
                     elements.btnPlay.disabled = false;
                 },
                 onError: (error) => {
+                    state.isPlaying = false;
                     showToast(translateError(error), 'error');
                     elements.progressContainer.style.display = 'none';
                     elements.btnPlay.disabled = false;
@@ -998,6 +1007,7 @@ async function handlePlay() {
             }
         );
     } catch (error) {
+        state.isPlaying = false;
         showToast(translateError(error.message), 'error');
         elements.progressContainer.style.display = 'none';
         elements.btnPlay.disabled = false;
