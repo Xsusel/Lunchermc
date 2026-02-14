@@ -296,13 +296,13 @@ export const modsApi = {
 };
 
 export const filesApi = {
-    // Lista plików
+    // Lista plików (globalne)
     getAll: async (type) => {
         const response = await api.get(`/files/admin/list/${type}`);
         return response.data;
     },
 
-    // Dodawanie pliku
+    // Dodawanie pliku (globalne)
     upload: async (type, formData) => {
         const response = await api.post(`/files/admin/upload/${type}`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
@@ -316,7 +316,7 @@ export const filesApi = {
         return response.data;
     },
 
-    // Usuwanie pliku
+    // Usuwanie pliku (globalne)
     delete: async (id, type) => {
         const response = await api.delete(`/files/admin/${type}/${id}`);
         return response.data;
@@ -325,6 +325,29 @@ export const filesApi = {
     // Synchronizacja
     sync: async () => {
         const response = await api.post('/files/admin/sync');
+        return response.data;
+    },
+
+    // === Per-server file management (disk-based) ===
+
+    // Lista plików serwera z folderu na dysku
+    getServerFiles: async (serverId, type) => {
+        const response = await api.get(`/files/admin/server/${serverId}/list/${type}`);
+        return response.data;
+    },
+
+    // Upload pliku do folderu serwera
+    uploadServerFile: async (serverId, type, formData) => {
+        const response = await api.post(`/files/admin/server/${serverId}/upload/${type}`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        return response.data;
+    },
+
+    // Usuwanie pliku z folderu serwera
+    deleteServerFile: async (serverId, type, filename, relativePath) => {
+        const params = relativePath ? `?path=${encodeURIComponent(relativePath)}` : '';
+        const response = await api.delete(`/files/admin/server/${serverId}/${type}/${encodeURIComponent(filename)}${params}`);
         return response.data;
     }
 };

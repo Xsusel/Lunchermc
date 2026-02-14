@@ -215,6 +215,41 @@ router.head('/servers/:serverId/mods/:filename', asyncHandler(async (req, res) =
 }));
 
 /**
+ * GET /api/download/servers/:serverId/files/:type/(*)
+ * Pobiera dowolny plik z folderu serwera (config, resourcepacks, shaderpacks, scripts, kubejs)
+ */
+router.get('/servers/:serverId/files/:type/*', asyncHandler(async (req, res) => {
+    const { serverId, type } = req.params;
+    const relativePath = req.params[0]; // everything after /type/
+
+    const allowedTypes = ['config', 'resourcepacks', 'shaderpacks', 'scripts', 'kubejs'];
+    if (!allowedTypes.includes(type)) {
+        return res.status(400).json({ success: false, error: 'Nieznany typ pliku' });
+    }
+
+    const serverTypePath = getServerSubPath(parseInt(serverId), type);
+    const filePath = path.resolve(serverTypePath, relativePath);
+
+    // Path traversal protection
+    if (!filePath.startsWith(serverTypePath)) {
+        return res.status(400).json({ success: false, error: 'Nieprawidłowa ścieżka' });
+    }
+
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return res.status(404).json({ success: false, error: 'Plik nie istnieje' });
+    }
+
+    const stat = fs.statSync(filePath);
+    const filename = path.basename(filePath);
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    fs.createReadStream(filePath).pipe(res);
+}));
+
+/**
  * GET /api/download/launcher/:filename
  * Pobiera plik launchera (dla auto-update)
  */
