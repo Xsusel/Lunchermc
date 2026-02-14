@@ -208,6 +208,19 @@ const migrations = [
             CREATE INDEX IF NOT EXISTS idx_crash_reports_created ON crash_reports(created_at);
         `,
     },
+
+    // ------------------------------------------------------------------
+    // 13. launcher_versions: sha512, file_size, filename for electron-updater
+    // ------------------------------------------------------------------
+    {
+        id: 13,
+        name: 'add_launcher_versions_electron_updater_columns',
+        sql: `
+            ALTER TABLE launcher_versions ADD COLUMN sha512 TEXT;
+            ALTER TABLE launcher_versions ADD COLUMN file_size INTEGER;
+            ALTER TABLE launcher_versions ADD COLUMN filename TEXT;
+        `,
+    },
 ];
 
 // ============================================

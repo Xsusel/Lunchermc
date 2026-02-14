@@ -285,6 +285,9 @@ ipcMain.handle('set-api-url', (event, url) => {
 app.whenReady().then(() => {
     createWindow();
 
+    // Skonfiguruj electron-updater z dynamicznym URL
+    configureAutoUpdater();
+
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
             createWindow();
@@ -299,13 +302,105 @@ app.on('window-all-closed', () => {
 });
 
 // ============================================
-// AUTO-UPDATE (Custom API-based)
+// AUTO-UPDATE (electron-updater + fallback)
 // ============================================
 
 let pendingUpdatePath = null;
+let useNativeUpdater = !!autoUpdater;
 
-// Sprawdza aktualizacje z API serwera
+/**
+ * Konfiguruje electron-updater z dynamicznym URL
+ * Ustawia feed URL na /api/launcher/releases (serwuje latest.yml)
+ */
+function configureAutoUpdater() {
+    if (!autoUpdater) return;
+
+    const apiUrl = resolveApiUrl();
+    const feedUrl = `${apiUrl}/api/launcher/releases`;
+
+    try {
+        autoUpdater.setFeedURL({
+            provider: 'generic',
+            url: feedUrl
+        });
+
+        autoUpdater.autoDownload = false; // Kontrolujemy kiedy pobierać
+        autoUpdater.autoInstallOnAppQuit = true;
+
+        // Aktualizacja dostępna
+        autoUpdater.on('update-available', (info) => {
+            console.log('electron-updater: update available', info.version);
+            mainWindow?.webContents.send('update-available', {
+                currentVersion: app.getVersion(),
+                latestVersion: info.version,
+                changelog: info.releaseNotes || '',
+                isRequired: false,
+                nativeUpdate: true
+            });
+        });
+
+        // Postęp pobierania
+        autoUpdater.on('download-progress', (progress) => {
+            mainWindow?.webContents.send('update-download-progress', {
+                percent: Math.round(progress.percent),
+                downloaded: progress.transferred,
+                total: progress.total,
+                bytesPerSecond: progress.bytesPerSecond,
+                status: `Pobieranie aktualizacji... ${Math.round(progress.percent)}%`
+            });
+        });
+
+        // Aktualizacja pobrana - gotowa do instalacji
+        autoUpdater.on('update-downloaded', (info) => {
+            console.log('electron-updater: update downloaded', info.version);
+            mainWindow?.webContents.send('update-downloaded', {
+                version: info.version,
+                nativeUpdate: true
+            });
+        });
+
+        // Brak aktualizacji
+        autoUpdater.on('update-not-available', () => {
+            console.log('electron-updater: no update available');
+            mainWindow?.webContents.send('update-not-available');
+        });
+
+        // Błąd
+        autoUpdater.on('error', (error) => {
+            console.error('electron-updater error:', error);
+            mainWindow?.webContents.send('update-error', {
+                error: error.message || 'Błąd aktualizacji'
+            });
+        });
+
+        console.log('electron-updater configured:', feedUrl);
+    } catch (e) {
+        console.warn('Failed to configure electron-updater:', e.message);
+        useNativeUpdater = false;
+    }
+}
+
+/**
+ * Sprawdza aktualizacje
+ * Próbuje najpierw electron-updater, jeśli niedostępny - custom API
+ */
 async function checkForUpdates() {
+    if (useNativeUpdater) {
+        try {
+            // Uaktualnij feed URL (może się zmienić w ustawieniach)
+            const apiUrl = resolveApiUrl();
+            autoUpdater.setFeedURL({
+                provider: 'generic',
+                url: `${apiUrl}/api/launcher/releases`
+            });
+            await autoUpdater.checkForUpdates();
+            return;
+        } catch (error) {
+            console.warn('electron-updater check failed, using custom fallback:', error.message);
+        }
+    }
+
+    // Fallback: custom API-based check
     try {
         const apiUrl = resolveApiUrl();
         const currentVersion = app.getVersion();
@@ -314,9 +409,8 @@ async function checkForUpdates() {
         const response = await fetchJson(url);
 
         if (response && response.success && response.data && response.data.updateAvailable) {
-            console.log(`Update available: ${response.data.latestVersion}`);
+            console.log(`Update available (custom): ${response.data.latestVersion}`);
 
-            // Resolve relative download URL to absolute
             let downloadUrl = response.data.downloadUrl;
             if (downloadUrl && !downloadUrl.startsWith('http')) {
                 downloadUrl = `${apiUrl}${downloadUrl.startsWith('/') ? '' : '/'}${downloadUrl}`;
@@ -328,10 +422,10 @@ async function checkForUpdates() {
                 downloadUrl,
                 sha256: response.data.sha256,
                 changelog: response.data.changelog,
-                isRequired: response.data.isRequired
+                isRequired: response.data.isRequired,
+                nativeUpdate: false
             });
         } else {
-            console.log('No update available');
             mainWindow?.webContents.send('update-not-available');
         }
     } catch (error) {
@@ -357,8 +451,11 @@ function fetchJson(url) {
     });
 }
 
-// Pobiera aktualizację
-async function downloadUpdate(downloadUrl, sha256, version) {
+/**
+ * Pobiera aktualizację (custom fallback)
+ * Używany gdy electron-updater nie jest dostępny
+ */
+async function downloadUpdateCustom(downloadUrl, sha256, version) {
     const tempDir = path.join(app.getPath('temp'), 'xsuslauncher-update');
     if (!fs.existsSync(tempDir)) {
         fs.mkdirSync(tempDir, { recursive: true });
@@ -374,7 +471,6 @@ async function downloadUpdate(downloadUrl, sha256, version) {
 
         const makeRequest = (url) => {
             client.get(url, (res) => {
-                // Handle redirects
                 if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                     makeRequest(res.headers.location);
                     return;
@@ -409,7 +505,6 @@ async function downloadUpdate(downloadUrl, sha256, version) {
 
                 fileStream.on('finish', () => {
                     fileStream.close(() => {
-                        // Weryfikuj SHA256
                         const fileHash = hash.digest('hex');
                         if (sha256 && fileHash !== sha256) {
                             fs.unlinkSync(filePath);
@@ -423,7 +518,7 @@ async function downloadUpdate(downloadUrl, sha256, version) {
                 });
 
                 fileStream.on('error', (err) => {
-                    fs.unlinkSync(filePath).catch(() => {});
+                    try { fs.unlinkSync(filePath); } catch (_) {}
                     reject(err);
                 });
             }).on('error', reject);
@@ -439,11 +534,18 @@ ipcMain.handle('check-for-updates', async () => {
     return { success: true };
 });
 
-// IPC: Pobierz i zainstaluj aktualizację
-ipcMain.handle('download-update', async (event, { downloadUrl, sha256, version }) => {
+// IPC: Pobierz aktualizację
+ipcMain.handle('download-update', async (event, data) => {
     try {
-        const filePath = await downloadUpdate(downloadUrl, sha256, version);
-        mainWindow?.webContents.send('update-downloaded', { filePath, version });
+        // Jeśli to native update (electron-updater) - pobierz przez autoUpdater
+        if (data.nativeUpdate && useNativeUpdater) {
+            await autoUpdater.downloadUpdate();
+            return { success: true, nativeUpdate: true };
+        }
+
+        // Custom fallback
+        const filePath = await downloadUpdateCustom(data.downloadUrl, data.sha256, data.version);
+        mainWindow?.webContents.send('update-downloaded', { filePath, version: data.version, nativeUpdate: false });
         return { success: true, filePath };
     } catch (error) {
         mainWindow?.webContents.send('update-error', { error: error.message });
@@ -452,34 +554,21 @@ ipcMain.handle('download-update', async (event, { downloadUrl, sha256, version }
 });
 
 // IPC: Zainstaluj pobraną aktualizację
-ipcMain.on('install-update', () => {
+ipcMain.on('install-update', (event, data) => {
+    // electron-updater: bezszwowa aktualizacja (podmienia pliki, restartuje)
+    if ((data?.nativeUpdate || !pendingUpdatePath) && useNativeUpdater) {
+        console.log('Installing update via electron-updater (seamless)...');
+        autoUpdater.quitAndInstall(false, true);
+        return;
+    }
+
+    // Custom fallback: uruchom instalator
     if (pendingUpdatePath && fs.existsSync(pendingUpdatePath)) {
-        // Uruchom instalator i zamknij launcher
+        console.log('Installing update via custom installer...');
         shell.openPath(pendingUpdatePath);
         setTimeout(() => app.quit(), 1000);
-    } else if (autoUpdater) {
-        autoUpdater.quitAndInstall();
     }
 });
-
-// electron-updater events (backup)
-if (autoUpdater) {
-    autoUpdater.on('update-available', (info) => {
-        mainWindow?.webContents.send('update-available', {
-            currentVersion: app.getVersion(),
-            latestVersion: info.version,
-            changelog: info.releaseNotes || ''
-        });
-    });
-
-    autoUpdater.on('update-downloaded', () => {
-        mainWindow?.webContents.send('update-downloaded', {});
-    });
-
-    autoUpdater.on('error', (error) => {
-        console.error('Auto-update error:', error);
-    });
-}
 
 // ============================================
 // OFFLINE MODE / ONLINE STATUS

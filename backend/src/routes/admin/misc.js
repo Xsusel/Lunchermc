@@ -484,9 +484,10 @@ router.post('/launcher-versions/upload',
             });
         }
 
-        // Oblicz SHA256 automatycznie
+        // Oblicz SHA256 i SHA512 automatycznie
         const fileBuffer = fs.readFileSync(req.file.path);
         const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+        const sha512 = crypto.createHash('sha512').update(fileBuffer).digest('base64');
 
         // Stwórz URL do pobrania
         const downloadUrl = `/api/download/launcher/${req.file.filename}`;
@@ -496,6 +497,9 @@ router.post('/launcher-versions/upload',
             version,
             download_url: downloadUrl,
             sha256,
+            sha512,
+            file_size: req.file.size,
+            filename: req.file.filename,
             changelog: req.body.changelog || null,
             is_required: req.body.is_required === 'true' || req.body.is_required === true ? 1 : 0
         });

@@ -12,14 +12,17 @@ class LauncherVersion {
      */
     static create(data) {
         const stmt = db.prepare(`
-            INSERT INTO launcher_versions (version, download_url, sha256, changelog, is_required)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO launcher_versions (version, download_url, sha256, sha512, file_size, filename, changelog, is_required)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const result = stmt.run(
             data.version,
             data.download_url,
             data.sha256,
+            data.sha512 || null,
+            data.file_size || null,
+            data.filename || null,
             data.changelog || null,
             data.is_required ? 1 : 0
         );
@@ -126,7 +129,7 @@ class LauncherVersion {
      * @returns {object|null} Zaktualizowana wersja
      */
     static update(id, data) {
-        const allowedFields = ['download_url', 'sha256', 'changelog', 'is_required'];
+        const allowedFields = ['download_url', 'sha256', 'sha512', 'file_size', 'filename', 'changelog', 'is_required'];
         const updates = [];
         const values = [];
 

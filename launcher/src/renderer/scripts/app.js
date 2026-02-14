@@ -2077,6 +2077,15 @@ function initAutoUpdate() {
         if (elements.updateProgress) elements.updateProgress.style.display = 'none';
         if (elements.updateFooter) elements.updateFooter.style.display = 'none';
         if (elements.updateInstallFooter) elements.updateInstallFooter.style.display = 'flex';
+
+        // Dostosuj tekst przycisku w zależności od typu aktualizacji
+        if (elements.btnUpdateInstall) {
+            if (data?.nativeUpdate) {
+                elements.btnUpdateInstall.textContent = 'Uruchom ponownie i zaktualizuj';
+            } else {
+                elements.btnUpdateInstall.textContent = 'Zainstaluj i uruchom ponownie';
+            }
+        }
         showToast('Aktualizacja pobrana! Kliknij aby zainstalować.', 'success');
     });
 
@@ -2149,7 +2158,8 @@ async function handleDownloadUpdate() {
         await window.electronAPI?.downloadUpdate({
             downloadUrl: pendingUpdate.downloadUrl,
             sha256: pendingUpdate.sha256,
-            version: pendingUpdate.latestVersion
+            version: pendingUpdate.latestVersion,
+            nativeUpdate: !!pendingUpdate.nativeUpdate
         });
     } catch (error) {
         showToast('Błąd pobierania aktualizacji', 'error');
@@ -2164,9 +2174,13 @@ async function handleDownloadUpdate() {
 
 /**
  * Obsługuje instalację pobranej aktualizacji
+ * Dla electron-updater: bezszwowy restart (podmiana plików)
+ * Dla custom: uruchomienie instalatora
  */
 function handleInstallUpdate() {
-    window.electronAPI?.installUpdate();
+    window.electronAPI?.installUpdate({
+        nativeUpdate: !!pendingUpdate?.nativeUpdate
+    });
 }
 
 // ============================================
