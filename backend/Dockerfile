@@ -11,6 +11,7 @@ RUN apk add --no-cache python3 make g++ sqlite wget su-exec
 # Ustawiamy zmienne srodowiskowe
 ENV NODE_ENV=production
 ENV PORT=3001
+ENV PROJECT_ROOT=/app
 
 # Ustawiamy katalog roboczy
 WORKDIR /app
