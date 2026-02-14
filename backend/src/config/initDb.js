@@ -1,18 +1,23 @@
 /**
  * Skrypt inicjalizujący bazę danych
  * Tworzy wszystkie wymagane tabele i dane początkowe
+ *
+ * Schemat zawiera WSZYSTKIE kolumny (w tym te z migracji),
+ * dzięki czemu świeża baza jest od razu kompletna.
+ * CREATE TABLE IF NOT EXISTS nie nadpisze istniejących tabel.
  */
 import 'dotenv/config';
 import db from './database.js';
 import bcrypt from 'bcryptjs';
 
-console.log('🚀 Inicjalizacja bazy danych...');
+console.log('Inicjalizacja bazy danych...');
 
 // ============================================
-// TWORZENIE TABEL
+// TWORZENIE TABEL (pełny schemat)
 // ============================================
 
 // Tabela użytkowników (graczy)
+// Zawiera kolumny z migracji: 4 (security_question), 9 (lockout), 11 (email)
 db.exec(`
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,22 +27,33 @@ db.exec(`
         ban_reason TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_login DATETIME,
-        total_playtime INTEGER DEFAULT 0
+        total_playtime INTEGER DEFAULT 0,
+        security_question TEXT,
+        security_answer_hash TEXT,
+        failed_attempts INTEGER DEFAULT 0,
+        locked_until DATETIME,
+        email TEXT
     )
 `);
 
 // Tabela administratorów
+// Zawiera kolumny z migracji: 2 (2FA), 3 (role)
 db.exec(`
     CREATE TABLE IF NOT EXISTS admins (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_login DATETIME
+        last_login DATETIME,
+        totp_secret TEXT,
+        totp_enabled INTEGER DEFAULT 0,
+        totp_backup_codes TEXT,
+        role TEXT DEFAULT 'admin'
     )
 `);
 
 // Tabela sesji (dla tokenów odświeżania)
+// Zawiera kolumny z migracji: 6 (extended session info)
 db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,6 +62,13 @@ db.exec(`
         user_type TEXT NOT NULL DEFAULT 'user',
         expires_at DATETIME NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        ip_address TEXT,
+        user_agent TEXT,
+        device_info TEXT,
+        is_active INTEGER DEFAULT 1,
+        last_activity DATETIME,
+        revoked_at DATETIME,
+        revoked_reason TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
 `);
@@ -68,6 +91,7 @@ db.exec(`
 `);
 
 // Tabela modów
+// Zawiera kolumny z migracji: 10 (download_count), 14 (curseforge)
 db.exec(`
     CREATE TABLE IF NOT EXISTS mods (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,7 +105,11 @@ db.exec(`
         mod_type TEXT DEFAULT 'mod',
         description TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        download_count INTEGER DEFAULT 0,
+        curseforge_id INTEGER,
+        curseforge_file_id INTEGER,
+        curseforge_url TEXT
     )
 `);
 
@@ -116,6 +144,7 @@ db.exec(`
 `);
 
 // Tabela logów aktywności
+// Zawiera kolumny z migracji: 1 (extended columns)
 db.exec(`
     CREATE TABLE IF NOT EXISTS activity_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,7 +152,16 @@ db.exec(`
         action TEXT NOT NULL,
         details TEXT,
         ip_address TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        category TEXT DEFAULT 'general',
+        severity TEXT DEFAULT 'info',
+        admin_id INTEGER,
+        resource_type TEXT,
+        resource_id TEXT,
+        old_value TEXT,
+        new_value TEXT,
+        user_agent TEXT,
+        session_id TEXT
     )
 `);
 
@@ -143,25 +181,6 @@ db.exec(`
     )
 `);
 
-// Migracja: dodaj brakujące kolumny do launcher_versions (dla istniejących baz)
-try {
-    const cols = db.prepare("PRAGMA table_info(launcher_versions)").all().map(c => c.name);
-    if (!cols.includes('sha512')) {
-        db.exec("ALTER TABLE launcher_versions ADD COLUMN sha512 TEXT");
-        console.log('✅ Migracja: dodano kolumnę sha512 do launcher_versions');
-    }
-    if (!cols.includes('file_size')) {
-        db.exec("ALTER TABLE launcher_versions ADD COLUMN file_size INTEGER DEFAULT 0");
-        console.log('✅ Migracja: dodano kolumnę file_size do launcher_versions');
-    }
-    if (!cols.includes('filename')) {
-        db.exec("ALTER TABLE launcher_versions ADD COLUMN filename TEXT");
-        console.log('✅ Migracja: dodano kolumnę filename do launcher_versions');
-    }
-} catch (e) {
-    // Kolumny już istnieją lub tabela jest nowa
-}
-
 // Tabela serwerów (wiele serwerów do wyboru w launcherze)
 db.exec(`
     CREATE TABLE IF NOT EXISTS servers (
@@ -178,18 +197,64 @@ db.exec(`
     )
 `);
 
+// Tabela z migracji 8: ban_appeals_v2
+db.exec(`
+    CREATE TABLE IF NOT EXISTS ban_appeals_v2 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        admin_response TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+`);
+
+// Tabela z migracji 12: crash_reports
+db.exec(`
+    CREATE TABLE IF NOT EXISTS crash_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        error_type TEXT NOT NULL,
+        error_message TEXT,
+        stack_trace TEXT,
+        system_info TEXT,
+        launcher_version TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    )
+`);
+
 // ============================================
 // TWORZENIE INDEKSÓW
 // ============================================
 
 db.exec(`
     CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+    CREATE INDEX IF NOT EXISTS idx_users_is_banned ON users(is_banned);
+    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_sessions_ip ON sessions(ip_address);
     CREATE INDEX IF NOT EXISTS idx_mods_enabled ON mods(is_enabled);
+    CREATE INDEX IF NOT EXISTS idx_mods_filename ON mods(filename);
+    CREATE INDEX IF NOT EXISTS idx_mods_curseforge ON mods(curseforge_id);
     CREATE INDEX IF NOT EXISTS idx_broadcasts_active ON broadcasts(is_active);
+    CREATE INDEX IF NOT EXISTS idx_activity_logs_category ON activity_logs(category);
+    CREATE INDEX IF NOT EXISTS idx_activity_logs_severity ON activity_logs(severity);
+    CREATE INDEX IF NOT EXISTS idx_activity_logs_resource ON activity_logs(resource_type, resource_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_logs_admin ON activity_logs(admin_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_logs_created ON activity_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_activity_logs_action ON activity_logs(action);
     CREATE INDEX IF NOT EXISTS idx_servers_enabled ON servers(is_enabled);
     CREATE INDEX IF NOT EXISTS idx_servers_order ON servers(display_order);
+    CREATE INDEX IF NOT EXISTS idx_ban_appeals_v2_user ON ban_appeals_v2(user_id);
+    CREATE INDEX IF NOT EXISTS idx_ban_appeals_v2_status ON ban_appeals_v2(status);
+    CREATE INDEX IF NOT EXISTS idx_crash_reports_user ON crash_reports(user_id);
+    CREATE INDEX IF NOT EXISTS idx_crash_reports_created ON crash_reports(created_at);
 `);
 
 // ============================================
@@ -206,7 +271,7 @@ if (configExists.count === 0) {
         process.env.MC_SERVER_IP || 'localhost',
         process.env.MC_SERVER_PORT || 25565
     );
-    console.log('✅ Utworzono domyślną konfigurację gry');
+    console.log('Utworzono domyslna konfiguracje gry');
 }
 
 // Sprawdzamy czy istnieje konto admina
@@ -221,8 +286,7 @@ if (adminExists.count === 0) {
         VALUES (?, ?)
     `).run(adminUsername, hashedPassword);
 
-    console.log(`✅ Utworzono konto administratora: ${adminUsername}`);
-    console.log('⚠️  ZMIEŃ DOMYŚLNE HASŁO ADMINISTRATORA!');
+    console.log(`Utworzono konto administratora: ${adminUsername}`);
 }
 
 // Migracja: przenieś serwer z game_config do tabeli servers
@@ -234,11 +298,73 @@ if (serversExist.count === 0) {
             INSERT INTO servers (name, ip, port, is_default, is_enabled, display_order)
             VALUES (?, ?, ?, 1, 1, 0)
         `).run('Serwer Xsus', gameConfig.server_ip, gameConfig.server_port || 25565);
-        console.log('✅ Zmigrowano serwer z game_config do tabeli servers');
+        console.log('Zmigrowano serwer z game_config do tabeli servers');
     }
 }
 
-console.log('✅ Baza danych została zainicjalizowana pomyślnie!');
-console.log(`📁 Lokalizacja: ${process.env.DATABASE_PATH || './data/launcher.db'}`);
+// ============================================
+// MIGRACJA KOLUMN DLA ISTNIEJĄCYCH BAZ
+// Dodaje brakujące kolumny do tabel, które istniały
+// przed aktualizacją schematu.
+// ============================================
+
+function addColumnIfMissing(table, column, definition) {
+    try {
+        const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+        if (!cols.includes(column)) {
+            db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+            console.log(`Migracja: dodano ${column} do ${table}`);
+        }
+    } catch (e) {
+        // Ignoruj błędy - kolumna może już istnieć
+    }
+}
+
+// admins - 2FA i role
+addColumnIfMissing('admins', 'totp_secret', 'TEXT');
+addColumnIfMissing('admins', 'totp_enabled', 'INTEGER DEFAULT 0');
+addColumnIfMissing('admins', 'totp_backup_codes', 'TEXT');
+addColumnIfMissing('admins', 'role', "TEXT DEFAULT 'admin'");
+
+// users - security, lockout, email
+addColumnIfMissing('users', 'security_question', 'TEXT');
+addColumnIfMissing('users', 'security_answer_hash', 'TEXT');
+addColumnIfMissing('users', 'failed_attempts', 'INTEGER DEFAULT 0');
+addColumnIfMissing('users', 'locked_until', 'DATETIME');
+addColumnIfMissing('users', 'email', 'TEXT');
+
+// sessions - extended info
+addColumnIfMissing('sessions', 'ip_address', 'TEXT');
+addColumnIfMissing('sessions', 'user_agent', 'TEXT');
+addColumnIfMissing('sessions', 'device_info', 'TEXT');
+addColumnIfMissing('sessions', 'is_active', 'INTEGER DEFAULT 1');
+addColumnIfMissing('sessions', 'last_activity', 'DATETIME');
+addColumnIfMissing('sessions', 'revoked_at', 'DATETIME');
+addColumnIfMissing('sessions', 'revoked_reason', 'TEXT');
+
+// activity_logs - extended columns
+addColumnIfMissing('activity_logs', 'category', "TEXT DEFAULT 'general'");
+addColumnIfMissing('activity_logs', 'severity', "TEXT DEFAULT 'info'");
+addColumnIfMissing('activity_logs', 'admin_id', 'INTEGER');
+addColumnIfMissing('activity_logs', 'resource_type', 'TEXT');
+addColumnIfMissing('activity_logs', 'resource_id', 'TEXT');
+addColumnIfMissing('activity_logs', 'old_value', 'TEXT');
+addColumnIfMissing('activity_logs', 'new_value', 'TEXT');
+addColumnIfMissing('activity_logs', 'user_agent', 'TEXT');
+addColumnIfMissing('activity_logs', 'session_id', 'TEXT');
+
+// mods - download_count i curseforge
+addColumnIfMissing('mods', 'download_count', 'INTEGER DEFAULT 0');
+addColumnIfMissing('mods', 'curseforge_id', 'INTEGER');
+addColumnIfMissing('mods', 'curseforge_file_id', 'INTEGER');
+addColumnIfMissing('mods', 'curseforge_url', 'TEXT');
+
+// launcher_versions - electron-updater columns
+addColumnIfMissing('launcher_versions', 'sha512', 'TEXT');
+addColumnIfMissing('launcher_versions', 'file_size', 'INTEGER DEFAULT 0');
+addColumnIfMissing('launcher_versions', 'filename', 'TEXT');
+
+console.log('Baza danych zainicjalizowana pomyslnie');
+console.log(`Lokalizacja: ${process.env.DATABASE_PATH || './data/launcher.db'}`);
 
 process.exit(0);
