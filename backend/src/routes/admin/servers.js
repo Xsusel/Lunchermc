@@ -9,7 +9,7 @@ import path from 'path';
 import { Server, Mod, ActivityLog } from '../../models/index.js';
 import { requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
-import { getClientIp, getUploadsPath, ensureDir, calculateSHA256, isAllowedModFile } from '../../utils/helpers.js';
+import { getClientIp, getUploadsPath, getServerPath, getServerSubPath, ensureDir, calculateSHA256, isAllowedModFile, createServerFolders, SERVER_FOLDERS } from '../../utils/helpers.js';
 import { pingMinecraftServer } from '../../utils/mcPing.js';
 
 const router = Router();
@@ -25,13 +25,26 @@ router.use('/servers/*', requireRole('admin'));
 router.get('/servers', asyncHandler(async (req, res) => {
     const servers = Server.getAll();
 
-    // Dodaj liczbę modów do każdego serwera
-    const serversWithModCount = servers.map(server => ({
-        ...server,
-        mod_count: Server.getModCount(server.id)
-    }));
+    // Dodaj liczbę modów i ścieżkę folderów do każdego serwera
+    const serversWithInfo = servers.map(server => {
+        const basePath = getServerPath(server.id);
+        // Sprawdź czy foldery istnieją, jeśli nie - utwórz
+        if (!fs.existsSync(basePath)) {
+            createServerFolders(server.id);
+        }
+        return {
+            ...server,
+            mod_count: Server.getModCount(server.id),
+            folder_path: `uploads/servers/${server.id}/`,
+            folders: SERVER_FOLDERS.map(f => ({
+                name: f,
+                path: `uploads/servers/${server.id}/${f}/`,
+                exists: fs.existsSync(getServerSubPath(server.id, f)),
+            })),
+        };
+    });
 
-    res.json({ success: true, data: serversWithModCount });
+    res.json({ success: true, data: serversWithInfo });
 }));
 
 /**
@@ -64,6 +77,9 @@ router.post('/servers',
 
         const server = Server.create(req.body);
 
+        // Utwórz strukturę folderów dla nowego serwera
+        createServerFolders(server.id);
+
         ActivityLog.logAdminAction('server_create', {
             serverId: server.id,
             name: server.name,
@@ -73,7 +89,10 @@ router.post('/servers',
         res.json({
             success: true,
             message: 'Serwer został dodany',
-            data: server
+            data: {
+                ...server,
+                folderPath: `uploads/servers/${server.id}/`
+            }
         });
     })
 );
