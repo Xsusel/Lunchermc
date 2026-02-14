@@ -65,7 +65,9 @@ function DashboardPage() {
         try {
             const response = await logsApi.getAll(5, 0, null);
             if (response.success) {
-                setRecentLogs(response.data);
+                // Handle both array and paginated object
+                const logs = Array.isArray(response.data) ? response.data : (response.data?.logs || []);
+                setRecentLogs(logs);
             }
         } catch (error) {
             // Ignoruj - logi zaladowane w stats
@@ -107,8 +109,13 @@ function DashboardPage() {
         );
     }
 
+    // Normalize recentActivity - handle both array and paginated object
+    const activityList = Array.isArray(stats?.recentActivity)
+        ? stats.recentActivity
+        : (stats?.recentActivity?.logs || recentLogs);
+
     // Oblicz dzisiejsze statystyki z recentActivity
-    const todayStats = computeTodayStats(stats?.recentActivity || recentLogs);
+    const todayStats = computeTodayStats(activityList);
 
     return (
         <div className="space-y-6 animate-fadeIn">
@@ -374,9 +381,9 @@ function DashboardPage() {
                         Ostatnia aktywnosc
                     </div>
 
-                    {(stats?.recentActivity?.length > 0 || recentLogs.length > 0) ? (
+                    {activityList.length > 0 ? (
                         <div className="space-y-3">
-                            {(stats?.recentActivity || recentLogs).slice(0, 5).map((log, index) => (
+                            {activityList.slice(0, 5).map((log, index) => (
                                 <div
                                     key={log.id || index}
                                     className="flex items-center justify-between py-2 border-b border-mc-gray last:border-0"
@@ -528,11 +535,14 @@ function UsageBar({ used, total, label }) {
 /**
  * Oblicza dzisiejsze statystyki z listy logow
  */
-function computeTodayStats(logs) {
+function computeTodayStats(data) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const todayLogs = (logs || []).filter(log => {
+    // Handle both array and paginated object {logs: [...], total, ...}
+    const logs = Array.isArray(data) ? data : (data?.logs || []);
+
+    const todayLogs = logs.filter(log => {
         try {
             return new Date(log.created_at) >= today;
         } catch {

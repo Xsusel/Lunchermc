@@ -337,7 +337,7 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
     const usersCount = User.count();
     const modsStats = Mod.getStats();
     const gameConfig = GameConfig.get();
-    const recentActivity = ActivityLog.getAll(10, 0);
+    const recentActivityResult = ActivityLog.getAll(10, 0);
     const activeBroadcasts = Broadcast.getActive().length;
 
     res.json({
@@ -355,7 +355,7 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
             broadcasts: {
                 active: activeBroadcasts
             },
-            recentActivity
+            recentActivity: recentActivityResult.logs || recentActivityResult
         }
     });
 }));
