@@ -467,83 +467,109 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
         }
 
         try {
-            const depMod = await cfGetModById(projectId);
+            // Try to get mod details from CurseForge (non-fatal - 403 possible)
+            let depMod = null;
+            try {
+                depMod = await cfGetModById(projectId);
+            } catch (cfModErr) {
+                console.warn(`[CurseForge] Nie mozna pobrac info o modzie ${projectId}: ${cfModErr.message}`);
+            }
 
-            // Get file info - use exact fileID from manifest
-            let depFile;
-            if (manifestFileId) {
-                try {
-                    depFile = await cfGetModpackFiles(projectId, manifestFileId);
-                } catch {
+            // Try to get file info from CurseForge (also non-fatal)
+            let depFile = null;
+            try {
+                if (manifestFileId) {
+                    try {
+                        depFile = await cfGetModpackFiles(projectId, manifestFileId);
+                    } catch {
+                        const depFiles = await cfGetModFiles(projectId, {
+                            gameVersion: mcVersion,
+                            pageSize: 1,
+                        });
+                        depFile = depFiles.data?.[0];
+                    }
+                } else {
                     const depFiles = await cfGetModFiles(projectId, {
                         gameVersion: mcVersion,
                         pageSize: 1,
                     });
                     depFile = depFiles.data?.[0];
                 }
-            } else {
-                const depFiles = await cfGetModFiles(projectId, {
-                    gameVersion: mcVersion,
-                    pageSize: 1,
-                });
-                depFile = depFiles.data?.[0];
+            } catch (cfFileErr) {
+                console.warn(`[CurseForge] Nie mozna pobrac pliku ${projectId}/${manifestFileId}: ${cfFileErr.message}`);
             }
 
-            if (!depFile) {
-                results.failed.push({
-                    modId: projectId,
-                    name: depMod.name,
-                    error: 'Nie znaleziono pliku',
-                });
-                continue;
-            }
+            const modName = depMod?.name || depFile?.displayName || `Mod #${projectId}`;
+            const modSlug = depMod?.slug || null;
 
-            const safeFilename = sanitizeFilename(depFile.fileName);
-
-            // Check if mod already exists
-            let existingMod = Mod.findByFilename(safeFilename);
-            if (existingMod) {
-                // Mod exists - just assign to this server
-                Server.assignMod(targetServer.id, existingMod.id);
-                results.skipped.push({
-                    modId: projectId,
-                    name: depMod.name,
-                    filename: safeFilename,
-                    reason: 'Juz istnieje - przypisano do serwera',
-                });
-                continue;
-            }
-
-            // Download (with Modrinth fallback)
-            const targetFileId = manifestFileId || depFile.id;
-            let downloadUrl = await cfGetFileDownloadUrl(projectId, targetFileId);
-            let usedModrinth = false;
-            let finalFilename = safeFilename;
-
-            if (!downloadUrl) {
-                // Fallback: szukaj na Modrinth
-                try {
-                    const mrResult = await mrFindModDownload(depMod.name, depMod.slug, {
-                        gameVersion: mcVersion,
-                        loader: loaderType,
+            // If we have file info, check if already exists
+            if (depFile) {
+                const safeFilename = sanitizeFilename(depFile.fileName);
+                let existingMod = Mod.findByFilename(safeFilename);
+                if (existingMod) {
+                    Server.assignMod(targetServer.id, existingMod.id);
+                    results.skipped.push({
+                        modId: projectId,
+                        name: modName,
+                        filename: safeFilename,
+                        reason: 'Juz istnieje - przypisano do serwera',
                     });
+                    continue;
+                }
+            }
+
+            // Try download from CurseForge first
+            let downloadUrl = null;
+            let usedModrinth = false;
+            let finalFilename = depFile ? sanitizeFilename(depFile.fileName) : `mod-${projectId}.jar`;
+
+            if (depFile) {
+                try {
+                    const targetFileId = manifestFileId || depFile.id;
+                    downloadUrl = await cfGetFileDownloadUrl(projectId, targetFileId);
+                } catch {
+                    // download URL endpoint also blocked
+                }
+            }
+
+            // Fallback: Modrinth
+            if (!downloadUrl) {
+                try {
+                    const mrResult = await mrFindModDownload(
+                        depMod?.name || depFile?.displayName || null,
+                        modSlug,
+                        { gameVersion: mcVersion, loader: loaderType }
+                    );
 
                     if (mrResult) {
                         downloadUrl = mrResult.downloadUrl;
-                        finalFilename = sanitizeFilename(mrResult.fileName || safeFilename);
+                        finalFilename = sanitizeFilename(mrResult.fileName || finalFilename);
                         usedModrinth = true;
-                        console.log(`[Modrinth fallback] ${depMod.name}: ${mrResult.downloadUrl}`);
+                        console.log(`[Modrinth fallback] ${modName}: ${mrResult.downloadUrl}`);
+
+                        // Check if Modrinth file already exists
+                        let existingMod = Mod.findByFilename(finalFilename);
+                        if (existingMod) {
+                            Server.assignMod(targetServer.id, existingMod.id);
+                            results.skipped.push({
+                                modId: projectId,
+                                name: modName,
+                                filename: finalFilename,
+                                reason: 'Juz istnieje (Modrinth) - przypisano do serwera',
+                            });
+                            continue;
+                        }
                     }
                 } catch (mrErr) {
-                    console.warn(`[Modrinth fallback] Failed for ${depMod.name}: ${mrErr.message}`);
+                    console.warn(`[Modrinth fallback] Blad dla ${modName}: ${mrErr.message}`);
                 }
             }
 
             if (!downloadUrl) {
                 results.failed.push({
                     modId: projectId,
-                    name: depMod.name,
-                    error: 'URL niedostepny (CurseForge + Modrinth)',
+                    name: modName,
+                    error: 'Niedostepny na CurseForge i Modrinth',
                 });
                 continue;
             }
@@ -552,7 +578,7 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
             if (!downloadResponse.ok) {
                 results.failed.push({
                     modId: projectId,
-                    name: depMod.name,
+                    name: modName,
                     error: `HTTP ${downloadResponse.status}${usedModrinth ? ' (Modrinth)' : ''}`,
                 });
                 continue;
@@ -566,7 +592,7 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
             const sha256 = await calculateSHA256(destPath);
 
             const newMod = Mod.create({
-                name: depMod.name,
+                name: modName,
                 filename: finalFilename,
                 url: `/api/download/servers/${targetServer.id}/mods/${finalFilename}`,
                 sha256,
@@ -574,10 +600,10 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 is_required: true,
                 is_enabled: true,
                 mod_type: 'mod',
-                description: depMod.summary || null,
+                description: depMod?.summary || null,
                 curseforge_id: projectId,
-                curseforge_file_id: usedModrinth ? null : targetFileId,
-                curseforge_url: depMod.links?.websiteUrl || null,
+                curseforge_file_id: usedModrinth ? null : (manifestFileId || depFile?.id || null),
+                curseforge_url: depMod?.links?.websiteUrl || null,
             });
 
             // Assign only to the target server
@@ -586,7 +612,7 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
             results.imported.push({
                 id: newMod.id,
                 modId: projectId,
-                name: depMod.name,
+                name: modName,
                 filename: finalFilename,
                 source: usedModrinth ? 'modrinth' : 'curseforge',
             });
