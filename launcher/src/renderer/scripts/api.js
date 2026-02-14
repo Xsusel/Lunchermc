@@ -257,12 +257,24 @@ class ApiClient {
     }
 
     /**
+     * Pobiera wyzwanie CAPTCHA (pytanie matematyczne)
+     */
+    async getCaptcha() {
+        return this.request('/auth/captcha');
+    }
+
+    /**
      * Rejestracja użytkownika
      */
-    async register(username, password) {
+    async register(username, password, captchaId, captchaAnswer) {
         const data = await this.request('/auth/register', {
             method: 'POST',
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify({
+                username,
+                password,
+                captcha_id: captchaId,
+                captcha_answer: parseInt(captchaAnswer)
+            })
         });
 
         if (data.success && data.data.token) {
