@@ -1,5 +1,5 @@
 /**
- * Trasy dla wersji Minecraft, Forge, Fabric
+ * Trasy dla wersji Minecraft, Forge, Fabric, NeoForge
  * Endpoint do pobierania dostępnych wersji
  */
 import { Router } from 'express';
@@ -7,8 +7,10 @@ import {
     getMinecraftVersions,
     getForgeVersions,
     getFabricVersions,
+    getNeoForgeVersions,
     getVersionDetails,
     getForgeInstallerUrl,
+    getNeoForgeInstallerUrl,
     getFabricUrls
 } from '../utils/mcVersions.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -140,14 +142,57 @@ router.get('/fabric/:mcVersion', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/versions/neoforge
+ * Pobiera wszystkie dostępne wersje NeoForge
+ */
+router.get('/neoforge', asyncHandler(async (req, res) => {
+    const { mc } = req.query;
+
+    const versions = await getNeoForgeVersions(mc);
+
+    res.json({
+        success: true,
+        data: versions
+    });
+}));
+
+/**
+ * GET /api/versions/neoforge/:mcVersion
+ * Pobiera wersje NeoForge dla konkretnej wersji Minecraft
+ */
+router.get('/neoforge/:mcVersion', asyncHandler(async (req, res) => {
+    const { mcVersion } = req.params;
+
+    const versions = await getNeoForgeVersions(mcVersion);
+
+    if (!versions || !versions.isSupported) {
+        return res.status(404).json({
+            success: false,
+            error: `Brak wersji NeoForge dla Minecraft ${mcVersion}`
+        });
+    }
+
+    // Dodaj URL instalatora
+    if (versions.latest) {
+        versions.latestInstallerUrl = getNeoForgeInstallerUrl(versions.latest);
+    }
+
+    res.json({
+        success: true,
+        data: versions
+    });
+}));
+
+/**
  * GET /api/versions/recommended
  * Pobiera zalecane wersje dla każdego typu
  */
 router.get('/recommended', asyncHandler(async (req, res) => {
-    const [minecraft, forge, fabric] = await Promise.all([
+    const [minecraft, forge, fabric, neoforge] = await Promise.all([
         getMinecraftVersions(),
         getForgeVersions('1.20.1'),
-        getFabricVersions()
+        getFabricVersions(),
+        getNeoForgeVersions('1.20.1')
     ]);
 
     res.json({
@@ -165,6 +210,11 @@ router.get('/recommended', asyncHandler(async (req, res) => {
             fabric: {
                 recommended: fabric.recommended,
                 supportedVersions: fabric.supportedVersions.slice(0, 5)
+            },
+            neoforge: {
+                mcVersion: '1.20.1',
+                latest: neoforge.latest,
+                isSupported: neoforge.isSupported
             }
         }
     });

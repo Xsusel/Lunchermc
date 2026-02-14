@@ -7,7 +7,8 @@ import https from 'https';
 // Cache dla wersji (odświeżany co godzinę)
 const cache = {
     minecraft: { data: null, timestamp: 0 },
-    forge: { data: null, timestamp: 0 }
+    forge: { data: null, timestamp: 0 },
+    neoforge: { data: null, timestamp: 0 }
 };
 
 const CACHE_TTL = 60 * 60 * 1000; // 1 godzina
@@ -219,6 +220,100 @@ export async function getFabricVersions(mcVersion = null) {
             isSupported: true
         };
     }
+}
+
+/**
+ * Pobiera wersje NeoForge dla danej wersji Minecraft
+ * NeoForge jest forkiem Forge dla MC 1.20.1+
+ * API: https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge
+ * @param {string} mcVersion - Wersja Minecraft (np. "1.20.1", "1.21")
+ * @returns {Promise<object>} Lista wersji NeoForge
+ */
+export async function getNeoForgeVersions(mcVersion = null) {
+    try {
+        const apiUrl = 'https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge';
+        const data = await fetchJSON(apiUrl);
+
+        // NeoForge versioning: MC 1.20.1 uses 47.x.x, MC 1.20.2+ uses {mcMinor}.{mcPatch}.x
+        // np. 1.20.1 -> 47.1.x, 1.20.4 -> 20.4.x, 1.21 -> 21.0.x
+        const allVersions = data.versions || [];
+
+        // Grupuj wersje po wersji MC
+        const versionsByMc = {};
+
+        for (const version of allVersions) {
+            // NeoForge wersje mają format: MAJOR.MINOR.PATCH lub MAJOR.MINOR.PATCH-beta
+            const parts = version.split('.');
+            if (parts.length < 3) continue;
+
+            const major = parseInt(parts[0]);
+            let detectedMc;
+
+            if (major === 47) {
+                // NeoForge 47.x.x = MC 1.20.1
+                detectedMc = '1.20.1';
+            } else {
+                // NeoForge 20.2.x = MC 1.20.2, 20.3.x = MC 1.20.3, 20.4.x = MC 1.20.4
+                // NeoForge 21.0.x = MC 1.21, 21.1.x = MC 1.21.1
+                const minor = parseInt(parts[1]);
+                detectedMc = minor === 0 ? `1.${major}` : `1.${major}.${minor}`;
+            }
+
+            if (!versionsByMc[detectedMc]) {
+                versionsByMc[detectedMc] = [];
+            }
+            versionsByMc[detectedMc].push(version);
+        }
+
+        // Sortuj wersje (najnowsze najpierw)
+        for (const mc of Object.keys(versionsByMc)) {
+            versionsByMc[mc].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+        }
+
+        if (mcVersion) {
+            const versions = versionsByMc[mcVersion] || [];
+            return {
+                mcVersion,
+                latest: versions[0] || null,
+                all: versions.slice(0, 20),
+                isSupported: versions.length > 0
+            };
+        }
+
+        // Zwróć wszystkie wersje MC z NeoForge
+        return {
+            versions: Object.entries(versionsByMc)
+                .map(([mc, versions]) => ({
+                    mcVersion: mc,
+                    latest: versions[0],
+                    count: versions.length
+                }))
+                .sort((a, b) => b.mcVersion.localeCompare(a.mcVersion, undefined, { numeric: true }))
+        };
+    } catch (error) {
+        console.error('Błąd pobierania wersji NeoForge:', error);
+
+        const fallback = {
+            '1.21': { mcVersion: '1.21', latest: '21.0.167', all: ['21.0.167'], isSupported: true },
+            '1.20.4': { mcVersion: '1.20.4', latest: '20.4.237', all: ['20.4.237'], isSupported: true },
+            '1.20.1': { mcVersion: '1.20.1', latest: '47.1.106', all: ['47.1.106'], isSupported: true }
+        };
+
+        if (mcVersion) {
+            return fallback[mcVersion] || { mcVersion, latest: null, all: [], isSupported: false };
+        }
+
+        return { versions: Object.values(fallback).map(v => ({ mcVersion: v.mcVersion, latest: v.latest, count: v.all.length })) };
+    }
+}
+
+/**
+ * Pobiera URL instalatora NeoForge
+ * @param {string} neoforgeVersion - Wersja NeoForge (np. "47.1.106" lub "20.4.237")
+ * @returns {string} URL instalatora
+ */
+export function getNeoForgeInstallerUrl(neoforgeVersion) {
+    return `https://maven.neoforged.net/releases/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-installer.jar`;
 }
 
 /**

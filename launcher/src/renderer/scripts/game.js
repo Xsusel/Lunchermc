@@ -220,6 +220,7 @@ class GameLauncher {
                 loaderType: gameConfig.loaderType || 'vanilla',
                 forgeVersion: gameConfig.forgeVersion,
                 fabricVersion: gameConfig.fabricVersion,
+                neoforgeVersion: gameConfig.neoforgeVersion,
                 serverIp: serverIp,
                 serverPort: serverPort,
                 serverName: serverName,

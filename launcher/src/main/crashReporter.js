@@ -284,6 +284,9 @@ class CrashReporter {
             if (crashData.gameConfig.forgeVersion) {
                 report += `Forge: ${crashData.gameConfig.forgeVersion}\n`;
             }
+            if (crashData.gameConfig.neoforgeVersion) {
+                report += `NeoForge: ${crashData.gameConfig.neoforgeVersion}\n`;
+            }
             report += `Serwer: ${crashData.gameConfig.serverIp || 'N/A'}:${crashData.gameConfig.serverPort || 25565}\n`;
             report += `Gracz: ${crashData.gameConfig.username || 'N/A'}\n`;
         }

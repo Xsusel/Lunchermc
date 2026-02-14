@@ -332,6 +332,17 @@ const migrations = [
             }
         },
     },
+    // ------------------------------------------------------------------
+    // 16. NeoForge support: neoforge_version column on game_config + servers
+    // ------------------------------------------------------------------
+    {
+        id: 16,
+        name: 'add_neoforge_version_column',
+        sql: `
+            ALTER TABLE game_config ADD COLUMN neoforge_version TEXT;
+            ALTER TABLE servers ADD COLUMN neoforge_version TEXT;
+        `,
+    },
 ];
 
 // ============================================

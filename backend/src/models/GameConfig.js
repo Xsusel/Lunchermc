@@ -34,6 +34,7 @@ class GameConfig {
             'game_version',
             'forge_version',
             'fabric_version',
+            'neoforge_version',
             'loader_type',
             'java_args',
             'server_ip',
@@ -96,6 +97,7 @@ class GameConfig {
             gameVersion: config.game_version,
             forgeVersion: config.forge_version,
             fabricVersion: config.fabric_version,
+            neoforgeVersion: config.neoforge_version,
             loaderType: config.loader_type,
             javaArgs: config.java_args,
             serverIp: config.server_ip,
@@ -134,12 +136,19 @@ class GameConfig {
         if (loaderType === 'forge') {
             updateData.forge_version = loaderVersion;
             updateData.fabric_version = null;
+            updateData.neoforge_version = null;
         } else if (loaderType === 'fabric') {
             updateData.fabric_version = loaderVersion;
             updateData.forge_version = null;
+            updateData.neoforge_version = null;
+        } else if (loaderType === 'neoforge') {
+            updateData.neoforge_version = loaderVersion;
+            updateData.forge_version = null;
+            updateData.fabric_version = null;
         } else {
             updateData.forge_version = null;
             updateData.fabric_version = null;
+            updateData.neoforge_version = null;
         }
 
         return this.update(updateData);

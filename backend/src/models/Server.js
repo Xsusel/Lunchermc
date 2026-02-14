@@ -24,6 +24,7 @@ class Server {
                 loader_type TEXT DEFAULT 'vanilla',
                 forge_version TEXT,
                 fabric_version TEXT,
+                neoforge_version TEXT,
                 java_args TEXT DEFAULT '-Xmx4G -Xms2G -XX:+UseG1GC',
                 maintenance_mode INTEGER DEFAULT 0,
                 maintenance_message TEXT,
@@ -100,7 +101,7 @@ class Server {
     static create(data) {
         const {
             name, description, ip, port, is_default,
-            game_version, loader_type, forge_version, fabric_version, java_args
+            game_version, loader_type, forge_version, fabric_version, neoforge_version, java_args
         } = data;
 
         // Jeśli nowy serwer jest domyślny, usuń flagę z innych
@@ -113,8 +114,8 @@ class Server {
 
         const result = db.prepare(`
             INSERT INTO servers (name, description, ip, port, is_default, is_enabled, display_order,
-                game_version, loader_type, forge_version, fabric_version, java_args)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                game_version, loader_type, forge_version, fabric_version, neoforge_version, java_args)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             name,
             description || null,
@@ -126,6 +127,7 @@ class Server {
             loader_type || 'vanilla',
             forge_version || null,
             fabric_version || null,
+            neoforge_version || null,
             java_args || '-Xmx4G -Xms2G -XX:+UseG1GC'
         );
 
@@ -138,7 +140,7 @@ class Server {
     static update(id, data) {
         const allowedFields = [
             'name', 'description', 'ip', 'port', 'is_default', 'is_enabled', 'display_order',
-            'game_version', 'loader_type', 'forge_version', 'fabric_version', 'java_args',
+            'game_version', 'loader_type', 'forge_version', 'fabric_version', 'neoforge_version', 'java_args',
             'maintenance_mode', 'maintenance_message'
         ];
         const updates = [];
@@ -417,6 +419,7 @@ class Server {
             loaderType: s.loader_type,
             forgeVersion: s.forge_version,
             fabricVersion: s.fabric_version,
+            neoforgeVersion: s.neoforge_version,
             javaArgs: s.java_args,
             maintenanceMode: !!s.maintenance_mode,
             maintenanceMessage: s.maintenance_message
@@ -435,6 +438,7 @@ class Server {
             gameVersion: server.game_version,
             forgeVersion: server.forge_version,
             fabricVersion: server.fabric_version,
+            neoforgeVersion: server.neoforge_version,
             loaderType: server.loader_type,
             javaArgs: server.java_args,
             serverIp: server.ip,
