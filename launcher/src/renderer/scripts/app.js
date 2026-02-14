@@ -19,7 +19,8 @@ const state = {
     servers: [],
     selectedServerId: null,
     serverStatuses: {},
-    isOffline: false
+    isOffline: false,
+    captchaId: null
 };
 
 // ============================================
@@ -114,6 +115,9 @@ const elements = {
     registerUsername: document.getElementById('register-username'),
     registerPassword: document.getElementById('register-password'),
     registerPasswordConfirm: document.getElementById('register-password-confirm'),
+    registerCaptcha: document.getElementById('register-captcha'),
+    captchaQuestion: document.getElementById('captcha-question'),
+    captchaRefresh: document.getElementById('captcha-refresh'),
     registerError: document.getElementById('register-error'),
     registerModalClose: document.getElementById('register-modal-close'),
     linkLogin: document.getElementById('link-login'),
@@ -389,17 +393,43 @@ function initModals() {
     // Formularze
     elements.loginForm?.addEventListener('submit', handleLogin);
     elements.registerForm?.addEventListener('submit', handleRegister);
+
+    // Odświeżanie CAPTCHA
+    elements.captchaRefresh?.addEventListener('click', loadCaptcha);
 }
 
 function openModal(name) {
     let modal;
     if (name === 'login') modal = elements.loginModal;
-    else if (name === 'register') modal = elements.registerModal;
+    else if (name === 'register') {
+        modal = elements.registerModal;
+        loadCaptcha();
+    }
     else if (name === 'changelog') modal = elements.changelogModal;
     else if (name === 'rules') modal = elements.rulesModal;
     else if (name === 'update') modal = elements.updateModal;
 
     modal?.classList.add('active');
+}
+
+async function loadCaptcha() {
+    try {
+        state.captchaId = null;
+        if (elements.captchaQuestion) elements.captchaQuestion.textContent = 'Ładowanie...';
+        if (elements.registerCaptcha) elements.registerCaptcha.value = '';
+
+        const response = await api.getCaptcha();
+        if (response.success && response.data) {
+            state.captchaId = response.data.id;
+            if (elements.captchaQuestion) {
+                elements.captchaQuestion.textContent = response.data.question;
+            }
+        }
+    } catch (error) {
+        if (elements.captchaQuestion) {
+            elements.captchaQuestion.textContent = 'Błąd ładowania CAPTCHA';
+        }
+    }
 }
 
 function closeModal(name) {
@@ -493,6 +523,7 @@ async function handleRegister(e) {
     const username = elements.registerUsername.value.trim();
     const password = elements.registerPassword.value;
     const passwordConfirm = elements.registerPasswordConfirm.value;
+    const captchaAnswer = elements.registerCaptcha?.value;
 
     if (!username || !password || !passwordConfirm) {
         showRegisterError('Wypełnij wszystkie pola');
@@ -504,8 +535,13 @@ async function handleRegister(e) {
         return;
     }
 
+    if (!captchaAnswer || !state.captchaId) {
+        showRegisterError('Rozwiąż zadanie CAPTCHA');
+        return;
+    }
+
     try {
-        const response = await api.register(username, password);
+        const response = await api.register(username, password, state.captchaId, captchaAnswer);
 
         if (response.success) {
             state.user = response.data.user;
@@ -525,6 +561,7 @@ async function handleRegister(e) {
         }
     } catch (error) {
         showRegisterError(error.message);
+        loadCaptcha(); // Reload CAPTCHA after failed attempt
     }
 }
 
