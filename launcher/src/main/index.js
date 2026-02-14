@@ -418,7 +418,9 @@ async function checkForUpdates() {
     try {
         const apiUrl = resolveApiUrl();
         const currentVersion = app.getVersion();
-        const url = `${apiUrl}/api/launcher/check-update?version=${currentVersion}`;
+        const arch = process.arch || 'x64';
+        const platform = process.platform || 'win32';
+        const url = `${apiUrl}/api/launcher/check-update?version=${currentVersion}&arch=${arch}&platform=${platform}`;
 
         const response = await fetchJson(url);
 
@@ -489,7 +491,8 @@ async function downloadUpdateCustom(downloadUrl, sha256, version) {
     }
 
     const ext = process.platform === 'win32' ? '.exe' : '.AppImage';
-    const filePath = path.join(tempDir, `XsusLauncher-${version}${ext}`);
+    const arch = process.arch || 'x64';
+    const filePath = path.join(tempDir, `XsusLauncher-${version}-${arch}${ext}`);
 
     return new Promise((resolve, reject) => {
         mainWindow?.webContents.send('update-download-progress', { percent: 0, status: 'Rozpoczynanie pobierania...' });
