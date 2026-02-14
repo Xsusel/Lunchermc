@@ -17,7 +17,8 @@ import {
     Server,
     Download,
     ScrollText,
-    Newspaper
+    Newspaper,
+    Shirt
 } from 'lucide-react';
 
 // Elementy nawigacji
@@ -29,6 +30,7 @@ const navItems = [
     { path: '/broadcasts', label: 'Powiadomienia', icon: Bell },
     { path: '/rules', label: 'Regulamin', icon: ScrollText },
     { path: '/news', label: 'Aktualnosci', icon: Newspaper },
+    { path: '/skins', label: 'Skiny', icon: Shirt },
     { path: '/logs', label: 'Logi', icon: FileText },
     { path: '/launcher-versions', label: 'Wersje Launchera', icon: Download },
     { path: '/system', label: 'System', icon: Server }

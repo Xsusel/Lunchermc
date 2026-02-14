@@ -4,8 +4,8 @@
  * Z obsługą trybu offline
  */
 
-// URL API - ustaw odpowiedni adres serwera
-const API_URL = 'https://mc.xsus.pl/api';
+// URL API - domyślny, nadpisywany z electron-store / env
+const DEFAULT_API_URL = 'https://mc.xsus.pl/api';
 
 // Globalny stan offline
 window.isOffline = false;
@@ -16,8 +16,9 @@ window.isOffline = false;
  */
 class ApiClient {
     constructor() {
-        this.baseUrl = API_URL;
+        this.baseUrl = DEFAULT_API_URL;
         this.token = null;
+        this._apiUrlLoaded = false;
 
         // Cache responses (optymalizacja dla słabszych PC)
         this.cache = new Map();
@@ -27,6 +28,35 @@ class ApiClient {
 
         // localStorage keys for offline cache
         this._offlineCachePrefix = 'xsus_offline_';
+    }
+
+    /**
+     * Ładuje URL API z main process (electron-store / env / default)
+     * Wywoływane raz przy pierwszym request
+     */
+    async loadApiUrl() {
+        if (this._apiUrlLoaded) return;
+        try {
+            const apiUrl = await window.electronAPI?.getApiUrl();
+            if (apiUrl) {
+                this.baseUrl = apiUrl.replace(/\/+$/, '') + '/api';
+            }
+        } catch (e) {
+            console.warn('[API] Failed to load API URL from main process:', e);
+        }
+        this._apiUrlLoaded = true;
+    }
+
+    /**
+     * Aktualizuje bazowy URL API (po zmianie w ustawieniach)
+     */
+    updateBaseUrl(apiUrl) {
+        if (apiUrl) {
+            this.baseUrl = apiUrl.replace(/\/+$/, '') + '/api';
+            this._apiUrlLoaded = true;
+            // Wyczyść cache po zmianie URL
+            this.clearCache();
+        }
     }
 
     /**
@@ -115,6 +145,9 @@ class ApiClient {
      * Wykonuje żądanie HTTP z opcjonalnym cache i offline fallback
      */
     async request(endpoint, options = {}, cacheOptions = {}) {
+        // Upewnij się, że URL API jest załadowany
+        await this.loadApiUrl();
+
         const { useCache = false, cacheTTL = this.defaultCacheTTL, forceRefresh = false } = cacheOptions;
         const cacheKey = `${endpoint}:${JSON.stringify(options.body || '')}`;
         const offlineCacheKey = endpoint.replace(/[^a-zA-Z0-9]/g, '_');

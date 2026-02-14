@@ -519,6 +519,44 @@ export const rulesApi = {
     }
 };
 
+export const skinsApi = {
+    // Lista skinów/peleryn
+    getAll: async (params = {}) => {
+        const query = new URLSearchParams();
+        if (params.limit) query.append('limit', params.limit);
+        if (params.offset) query.append('offset', params.offset);
+        if (params.search) query.append('search', params.search);
+        const response = await api.get(`/admin/skins?${query.toString()}`);
+        return response.data;
+    },
+
+    // Szczegóły skina
+    getById: async (id) => {
+        const response = await api.get(`/admin/skins/${id}`);
+        return response.data;
+    },
+
+    // Usuwanie skina
+    delete: async (id) => {
+        const response = await api.delete(`/admin/skins/${id}`);
+        return response.data;
+    },
+
+    // Usuwanie peleryny
+    deleteCape: async (id) => {
+        const response = await api.delete(`/admin/skins/${id}/cape`);
+        return response.data;
+    }
+};
+
+export const healthApi = {
+    // Szczegółowy status systemu (dysk, pamięć, etc.)
+    getDetailed: async () => {
+        const response = await api.get('/admin/health/detailed');
+        return response.data;
+    }
+};
+
 export const newsApi = {
     // Lista wszystkich wiadomości
     getAll: async (options = {}) => {

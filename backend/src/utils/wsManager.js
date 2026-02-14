@@ -7,6 +7,7 @@
  * - Różne typy powiadomień
  */
 import { WebSocketServer } from 'ws';
+import jwt from 'jsonwebtoken';
 import { createLogger } from './logger.js';
 
 const log = createLogger('WebSocket');
@@ -42,7 +43,29 @@ class WebSocketManager {
      * Inicjalizuje WebSocket Server
      */
     init(server, path = '/ws') {
-        this.wss = new WebSocketServer({ server, path });
+        this.wss = new WebSocketServer({
+            server,
+            path,
+            verifyClient: (info, callback) => {
+                // Weryfikacja JWT z query string: ws://host/ws?token=XXX
+                try {
+                    const url = new URL(info.req.url, 'http://localhost');
+                    const token = url.searchParams.get('token');
+
+                    if (token) {
+                        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                        // Zapisz decoded w req dla handleConnection
+                        info.req.jwtPayload = decoded;
+                    }
+                    // Pozwalamy też na połączenia bez tokenu (publiczne broadcasts)
+                    // ale oznaczamy je jako nieautoryzowane
+                    callback(true);
+                } catch (err) {
+                    log.warn('Odrzucono połączenie WS - nieprawidłowy token', { error: err.message });
+                    callback(false, 401, 'Unauthorized');
+                }
+            }
+        });
 
         this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
 
@@ -60,6 +83,9 @@ class WebSocketManager {
         const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
                          req.socket?.remoteAddress || 'unknown';
 
+        // Odczytaj dane JWT z handshake (jeśli podano token)
+        const jwtPayload = req.jwtPayload || null;
+
         // Zapisz informacje o kliencie
         const clientInfo = {
             id: clientId,
@@ -67,8 +93,10 @@ class WebSocketManager {
             connectedAt: new Date(),
             lastPing: new Date(),
             subscriptions: new Set(['broadcast']), // Domyślnie subskrybuje broadcasts
-            userId: null,
-            username: null,
+            userId: jwtPayload?.id || null,
+            username: jwtPayload?.username || null,
+            authenticated: !!jwtPayload,
+            tokenType: jwtPayload?.type || null,
             isAlive: true,
             // Rate limiting
             messageCount: 0,
@@ -207,14 +235,24 @@ class WebSocketManager {
                     break;
 
                 case 'auth':
-                    // Autoryzacja (opcjonalna - dla identyfikacji użytkownika)
-                    if (message.userId && message.username) {
-                        client.userId = message.userId;
-                        client.username = message.username;
-                        this.send(ws, {
-                            type: 'authenticated',
-                            data: { userId: message.userId, username: message.username }
-                        });
+                    // Autoryzacja przez JWT token (bezpieczna identyfikacja)
+                    if (message.token) {
+                        try {
+                            const decoded = jwt.verify(message.token, process.env.JWT_SECRET);
+                            client.userId = decoded.id;
+                            client.username = decoded.username;
+                            client.authenticated = true;
+                            client.tokenType = decoded.type;
+                            this.send(ws, {
+                                type: 'authenticated',
+                                data: { userId: decoded.id, username: decoded.username }
+                            });
+                        } catch (err) {
+                            this.send(ws, {
+                                type: this.NotificationTypes.ERROR,
+                                data: { message: 'Nieprawidłowy token autoryzacji' }
+                            });
+                        }
                     }
                     break;
 

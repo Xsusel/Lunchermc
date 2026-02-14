@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import { body, validationResult } from 'express-validator';
 import { User, ActivityLog } from '../models/index.js';
+import BanAppeal from '../models/BanAppeal.js';
 import {
     authenticateUser,
     generateUserToken,
@@ -13,6 +14,8 @@ import {
 } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { isValidUsername, isValidPassword, getClientIp } from '../utils/helpers.js';
+import { generateChallenge, verifyChallenge } from '../utils/captcha.js';
+import { notifyNewUser } from '../utils/discord.js';
 
 const router = Router();
 
@@ -46,7 +49,22 @@ router.post('/register',
             });
         }
 
-        const { username, password } = req.body;
+        const { username, password, captcha_id, captcha_answer } = req.body;
+
+        // Weryfikacja CAPTCHA
+        if (!captcha_id || captcha_answer === undefined || captcha_answer === null) {
+            return res.status(400).json({
+                success: false,
+                error: 'CAPTCHA jest wymagana. Pobierz wyzwanie z GET /api/auth/captcha'
+            });
+        }
+
+        if (!verifyChallenge(captcha_id, captcha_answer)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nieprawidłowa odpowiedź CAPTCHA'
+            });
+        }
 
         // Sprawdzamy czy nazwa jest dostępna
         if (!User.isUsernameAvailable(username)) {
@@ -64,6 +82,9 @@ router.post('/register',
 
         // Generujemy token z IP binding
         const token = generateUserToken(user, getClientIp(req));
+
+        // Powiadomienie Discord (async, nie blokuje odpowiedzi)
+        notifyNewUser(user.username).catch(() => {});
 
         res.status(201).json({
             success: true,
@@ -103,6 +124,16 @@ router.post('/login',
 
         // Weryfikujemy dane logowania
         const user = User.verifyPassword(username, password);
+
+        // Konto zablokowane po zbyt wielu próbach
+        if (user && user.locked) {
+            const lockMinutes = Math.ceil((new Date(user.locked_until) - new Date()) / 60000);
+            return res.status(429).json({
+                success: false,
+                error: `Konto tymczasowo zablokowane. Spróbuj za ${lockMinutes} minut.`
+            });
+        }
+
         if (!user) {
             return res.status(401).json({
                 success: false,
@@ -367,6 +398,108 @@ router.post('/reset-password',
             success: true,
             message: 'Hasło zostało zresetowane pomyślnie'
         });
+    })
+);
+
+// ============================================
+// CAPTCHA
+// ============================================
+
+/**
+ * GET /api/auth/captcha
+ * Generuje wyzwanie CAPTCHA (math challenge)
+ * Zwraca: { id, question }
+ */
+router.get('/captcha',
+    asyncHandler(async (req, res) => {
+        const challenge = generateChallenge();
+
+        res.json({
+            success: true,
+            data: {
+                id: challenge.id,
+                question: challenge.question
+            }
+        });
+    })
+);
+
+// ============================================
+// APELE OD BANOW
+// ============================================
+
+/**
+ * POST /api/auth/appeal
+ * Skladanie apelu od bana (uzytkownik)
+ * Wymaga: username, reason
+ * Rate limited: authLimiter
+ */
+router.post('/appeal',
+    authLimiter,
+    [
+        body('username')
+            .trim()
+            .notEmpty().withMessage('Nazwa użytkownika jest wymagana'),
+        body('reason')
+            .trim()
+            .notEmpty().withMessage('Powód apelu jest wymagany')
+            .isLength({ min: 10, max: 2000 }).withMessage('Powód apelu musi mieć 10-2000 znaków')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const { username, reason } = req.body;
+
+        // Znajdz uzytkownika
+        const user = User.findByUsername(username);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Użytkownik nie istnieje'
+            });
+        }
+
+        if (!user.is_banned) {
+            return res.status(400).json({
+                success: false,
+                error: 'Użytkownik nie jest zbanowany'
+            });
+        }
+
+        try {
+            const appeal = BanAppeal.create({
+                userId: user.id,
+                reason
+            });
+
+            ActivityLog.logSecurityEvent('ban_appeal_submitted', getClientIp(req), {
+                userId: user.id,
+                username: user.username,
+                appealId: appeal.id
+            });
+
+            res.status(201).json({
+                success: true,
+                message: 'Apel został złożony i oczekuje na rozpatrzenie',
+                data: {
+                    id: appeal.id,
+                    status: appeal.status,
+                    createdAt: appeal.created_at
+                }
+            });
+        } catch (error) {
+            return res.status(400).json({
+                success: false,
+                error: error.message
+            });
+        }
     })
 );
 

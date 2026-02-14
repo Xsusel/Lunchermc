@@ -85,7 +85,18 @@ const elements = {
     btnOpenFolder: document.getElementById('btn-open-folder'),
     btnResetSettings: document.getElementById('btn-reset-settings'),
     btnSaveSettings: document.getElementById('btn-save-settings'),
+    apiUrl: document.getElementById('api-url'),
+    btnApiUrlReset: document.getElementById('btn-api-url-reset'),
     launcherVersion: document.getElementById('launcher-version'),
+
+    // Logi gry
+    logSessionSelect: document.getElementById('log-session-select'),
+    btnLogsClear: document.getElementById('btn-logs-clear'),
+    btnLogsCopy: document.getElementById('btn-logs-copy'),
+    btnLogsFolder: document.getElementById('btn-logs-folder'),
+    logsAutoscroll: document.getElementById('logs-autoscroll'),
+    logsContainer: document.getElementById('logs-container'),
+    logsOutput: document.getElementById('logs-output'),
 
     // Modale
     loginModal: document.getElementById('login-modal'),
@@ -302,6 +313,11 @@ function switchPage(pageName) {
     elements.pages.forEach(page => {
         page.classList.toggle('active', page.id === `page-${pageName}`);
     });
+
+    // Odśwież dane specyficzne dla strony
+    if (pageName === 'logs') {
+        loadLogSessions();
+    }
 }
 
 // ============================================
@@ -1076,11 +1092,41 @@ async function initSettings() {
     // Przycisk auto-instalacji Java
     elements.btnJavaInstall?.addEventListener('click', handleAutoInstallJava);
 
+    // API URL
+    try {
+        const currentApiUrl = await window.electronAPI?.getApiUrl();
+        const storeApiUrl = await window.electronAPI?.getStore('apiUrl');
+        if (elements.apiUrl) {
+            // Pokaż zapisaną wartość (puste = domyślny)
+            elements.apiUrl.value = storeApiUrl || '';
+            elements.apiUrl.placeholder = `${currentApiUrl} (domyślny)`;
+        }
+    } catch (e) {
+        console.warn('Błąd ładowania API URL:', e);
+    }
+
+    elements.btnApiUrlReset?.addEventListener('click', async () => {
+        if (elements.apiUrl) {
+            elements.apiUrl.value = '';
+        }
+        await window.electronAPI?.setApiUrl('');
+        const resolvedUrl = await window.electronAPI?.getApiUrl();
+        if (elements.apiUrl) {
+            elements.apiUrl.placeholder = `${resolvedUrl} (domyślny)`;
+        }
+        // Aktualizuj api client
+        api.updateBaseUrl(resolvedUrl);
+        showToast('URL API przywrócony do domyślnego', 'info');
+    });
+
     // Sprawdz status Java
     await checkJavaStatus();
 
     // Inicjalizuj selektor motywów
     await initThemeSelector();
+
+    // Inicjalizuj logi gry
+    initGameLogs();
 }
 
 /**
@@ -1160,6 +1206,7 @@ async function saveSettings() {
                 min: parseInt(elements.ramMin.value),
                 max: parseInt(elements.ramMax.value)
             },
+            ramManuallyConfigured: true,
             javaPath: elements.javaPath.value,
             customJavaArgs: elements.customJavaArgs.value,
             resolution: {
@@ -1176,6 +1223,7 @@ async function saveSettings() {
             min: parseInt(elements.ramMin.value),
             max: parseInt(elements.ramMax.value)
         });
+        await window.electronAPI?.setStore('ramManuallyConfigured', true);
         await window.electronAPI?.setStore('javaPath', elements.javaPath.value);
         await window.electronAPI?.setStore('customJavaArgs', elements.customJavaArgs.value);
         await window.electronAPI?.setStore('resolution', {
@@ -1185,6 +1233,14 @@ async function saveSettings() {
         });
         await window.electronAPI?.setStore('closeOnLaunch', elements.closeOnLaunch.checked);
         await window.electronAPI?.setStore('autoUpdate', elements.autoUpdate.checked);
+    }
+
+    // Zapisz API URL osobno (wymaga specjalnej obsługi)
+    const newApiUrl = elements.apiUrl?.value?.trim() || '';
+    const result = await window.electronAPI?.setApiUrl(newApiUrl);
+    if (result?.success) {
+        // Aktualizuj api client w rendererze
+        api.updateBaseUrl(result.apiUrl);
     }
 
     showToast('Ustawienia zapisane!', 'success');
@@ -1204,6 +1260,7 @@ async function resetSettings() {
     elements.fullscreen.checked = false;
     elements.closeOnLaunch.checked = false;
     elements.autoUpdate.checked = true;
+    if (elements.apiUrl) elements.apiUrl.value = '';
 
     await saveSettings();
     showToast('Ustawienia przywrócone do domyślnych', 'info');
@@ -1728,6 +1785,241 @@ async function handleAutoInstallJava() {
         if (elements.javaActions) elements.javaActions.style.display = 'block';
     } finally {
         if (elements.javaInstallProgress) elements.javaInstallProgress.style.display = 'none';
+    }
+}
+
+// ============================================
+// LOGI GRY
+// ============================================
+
+// Stan logów
+const logState = {
+    entries: [],
+    maxEntries: 5000,
+    autoscroll: true,
+    currentSession: 'current'
+};
+
+/**
+ * Inicjalizuje panel logów gry
+ */
+function initGameLogs() {
+    // Auto-scroll checkbox
+    elements.logsAutoscroll?.addEventListener('change', (e) => {
+        logState.autoscroll = e.target.checked;
+        if (logState.autoscroll) {
+            scrollLogsToBottom();
+        }
+    });
+
+    // Wyczyść logi
+    elements.btnLogsClear?.addEventListener('click', () => {
+        logState.entries = [];
+        renderLogs();
+    });
+
+    // Kopiuj logi
+    elements.btnLogsCopy?.addEventListener('click', () => {
+        const logText = logState.entries.map(e => `[${e.time}] ${e.line}`).join('\n');
+        if (navigator.clipboard && logText) {
+            navigator.clipboard.writeText(logText).then(() => {
+                showToast('Logi skopiowane do schowka', 'success');
+            }).catch(() => {
+                showToast('Nie udało się skopiować logów', 'error');
+            });
+        } else if (!logText) {
+            showToast('Brak logów do skopiowania', 'info');
+        }
+    });
+
+    // Otwórz folder logów
+    elements.btnLogsFolder?.addEventListener('click', () => {
+        window.electronAPI?.openLogsFolder();
+    });
+
+    // Selektor sesji
+    elements.logSessionSelect?.addEventListener('change', async (e) => {
+        const value = e.target.value;
+        logState.currentSession = value;
+
+        if (value === 'current') {
+            // Załaduj bieżące logi z pamięci
+            const currentLogs = await window.electronAPI?.getCurrentLogs();
+            logState.entries = currentLogs || [];
+            renderLogs();
+        } else {
+            // Załaduj logi z pliku
+            const content = await window.electronAPI?.readLogFile(value);
+            if (content) {
+                // Parsuj plik logu na wpisy
+                logState.entries = content.split('\n')
+                    .filter(line => line.trim())
+                    .map(line => {
+                        const match = line.match(/^\[(.+?)\] (.*)$/);
+                        if (match) {
+                            return { time: match[1], line: match[2] };
+                        }
+                        return { time: '', line: line };
+                    });
+                renderLogs();
+            } else {
+                logState.entries = [];
+                renderLogs();
+                showToast('Nie udało się odczytać pliku logu', 'error');
+            }
+        }
+    });
+
+    // Nasłuchuj logów w real-time
+    window.electronAPI?.onGameLog((entry) => {
+        if (logState.currentSession === 'current') {
+            logState.entries.push(entry);
+
+            // Ogranicz liczbę wpisów w UI
+            if (logState.entries.length > logState.maxEntries) {
+                logState.entries.shift();
+            }
+
+            appendLogEntry(entry);
+        }
+    });
+
+    // Odśwież sesje logów po zamknięciu gry
+    gameLauncher.setGameCloseCallback((data) => {
+        // Odśwież listę sesji z opóźnieniem (poczekaj na zapis pliku)
+        setTimeout(() => {
+            loadLogSessions();
+        }, 1000);
+    });
+
+    // Załaduj listę sesji
+    loadLogSessions();
+}
+
+/**
+ * Ładuje listę dostępnych sesji logów
+ */
+async function loadLogSessions() {
+    if (!elements.logSessionSelect) return;
+
+    try {
+        const sessions = await window.electronAPI?.getLogSessions();
+
+        // Zachowaj opcję "Bieżąca sesja"
+        elements.logSessionSelect.innerHTML = '<option value="current">Bieżąca sesja</option>';
+
+        if (sessions && sessions.length > 0) {
+            for (const session of sessions) {
+                const option = document.createElement('option');
+                option.value = session.path;
+                const date = new Date(session.created);
+                const dateStr = date.toLocaleDateString('pl-PL');
+                const timeStr = date.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+                const sizeStr = formatBytes(session.size);
+                option.textContent = `${dateStr} ${timeStr} (${sizeStr})`;
+                elements.logSessionSelect.appendChild(option);
+            }
+        }
+    } catch (e) {
+        console.warn('Błąd ładowania sesji logów:', e);
+    }
+}
+
+/**
+ * Renderuje wszystkie logi
+ */
+function renderLogs() {
+    if (!elements.logsOutput) return;
+
+    if (logState.entries.length === 0) {
+        elements.logsOutput.innerHTML = '<div class="logs-empty">Brak logów. Uruchom grę, aby zobaczyć logi.</div>';
+        return;
+    }
+
+    // Renderuj tylko z ograniczeniem wydajnościowym
+    const fragment = document.createDocumentFragment();
+    const entriesToRender = logState.entries.slice(-2000); // Max 2000 w DOM
+
+    for (const entry of entriesToRender) {
+        const el = createLogElement(entry);
+        fragment.appendChild(el);
+    }
+
+    elements.logsOutput.innerHTML = '';
+    elements.logsOutput.appendChild(fragment);
+
+    if (logState.autoscroll) {
+        scrollLogsToBottom();
+    }
+}
+
+/**
+ * Tworzy element DOM dla wpisu logu
+ */
+function createLogElement(entry) {
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+
+    // Wykryj typ linii (error, warning, info)
+    const line = entry.line || '';
+    if (/error|exception|fatal|crash/i.test(line)) {
+        div.classList.add('log-error');
+    } else if (/warn|warning/i.test(line)) {
+        div.classList.add('log-warn');
+    } else if (/info/i.test(line)) {
+        div.classList.add('log-info');
+    }
+
+    if (entry.time) {
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'log-time';
+        // Pokaż tylko godzinę:minutę:sekundę
+        try {
+            const date = new Date(entry.time);
+            timeSpan.textContent = date.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        } catch (e) {
+            timeSpan.textContent = entry.time.substring(11, 19);
+        }
+        div.appendChild(timeSpan);
+    }
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'log-text';
+    textSpan.textContent = line;
+    div.appendChild(textSpan);
+
+    return div;
+}
+
+/**
+ * Dodaje pojedynczy wpis logu do panelu
+ */
+function appendLogEntry(entry) {
+    if (!elements.logsOutput) return;
+
+    // Usuń placeholder "brak logów"
+    const emptyMsg = elements.logsOutput.querySelector('.logs-empty');
+    if (emptyMsg) emptyMsg.remove();
+
+    const el = createLogElement(entry);
+    elements.logsOutput.appendChild(el);
+
+    // Ogranicz liczbę elementów DOM
+    while (elements.logsOutput.children.length > 2000) {
+        elements.logsOutput.removeChild(elements.logsOutput.firstChild);
+    }
+
+    if (logState.autoscroll) {
+        scrollLogsToBottom();
+    }
+}
+
+/**
+ * Przewija logi na dół
+ */
+function scrollLogsToBottom() {
+    if (elements.logsContainer) {
+        elements.logsContainer.scrollTop = elements.logsContainer.scrollHeight;
     }
 }
 

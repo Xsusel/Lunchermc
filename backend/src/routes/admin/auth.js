@@ -64,6 +64,12 @@ router.post('/login',
             });
         }
 
+        // Sprawdź czy admin używa domyślnego hasła
+        const isDefaultPassword = (
+            password === 'ZMIEN_HASLO_ADMINA' ||
+            password === process.env.ADMIN_PASSWORD && username === (process.env.ADMIN_USERNAME || 'admin')
+        );
+
         // Logujemy akcję
         ActivityLog.logAdminAction('login', { admin: username }, getClientIp(req));
 
@@ -77,7 +83,8 @@ router.post('/login',
                     username: admin.username,
                     role: admin.role || 'admin'
                 },
-                token
+                token,
+                mustChangePassword: isDefaultPassword
             }
         });
     })

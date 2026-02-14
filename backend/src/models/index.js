@@ -17,3 +17,4 @@ export { default as ServerRules } from './ServerRules.js';
 export { default as News } from './News.js';
 export { default as Server } from './Server.js';
 export { default as Skin } from './Skin.js';
+export { default as BanAppeal } from './BanAppeal.js';

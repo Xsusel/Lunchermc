@@ -9,9 +9,11 @@ import {
     User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion,
     PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules, News, Skin
 } from '../../models/index.js';
+import BanAppeal from '../../models/BanAppeal.js';
 import { authenticateAdmin, requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getClientIp } from '../../utils/helpers.js';
+import { notifyBan } from '../../utils/discord.js';
 
 const router = Router();
 
@@ -1197,6 +1199,12 @@ router.post('/bans/user',
 
         ActivityLog.logBan(userId, null, adminId, getClientIp(req), reason);
 
+        // Powiadomienie Discord (async, nie blokuje odpowiedzi)
+        const bannedUser = User.findById(userId);
+        if (bannedUser) {
+            notifyBan(bannedUser.username, reason).catch(() => {});
+        }
+
         res.json({
             success: true,
             message: 'Użytkownik został zbanowany',
@@ -2295,6 +2303,84 @@ router.delete('/skins/:userId',
             success: true,
             message: `Skin użytkownika ${user.username} został usunięty`
         });
+    })
+);
+
+// ============================================
+// APELE OD BANOW (BanAppeal model - v2)
+// ============================================
+
+/**
+ * GET /api/admin/appeals
+ * Lista wszystkich apeli
+ */
+router.get('/appeals',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const options = {
+            limit: parseInt(req.query.limit) || 50,
+            offset: parseInt(req.query.offset) || 0,
+            status: req.query.status || null
+        };
+
+        const result = BanAppeal.getAll(options);
+
+        res.json({
+            success: true,
+            data: result.appeals,
+            total: result.total
+        });
+    })
+);
+
+/**
+ * PUT /api/admin/appeals/:id
+ * Aktualizuje status apelu (approved/rejected)
+ */
+router.put('/appeals/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą'),
+        body('status').isIn(['approved', 'rejected']).withMessage('Status musi być approved lub rejected'),
+        body('admin_response').optional().trim()
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const { status, admin_response } = req.body;
+
+        try {
+            const appeal = BanAppeal.updateStatus(id, status, admin_response || '');
+
+            ActivityLog.logAdminAction('ban_appeal_review', {
+                appealId: id,
+                status,
+                userId: appeal.user_id,
+                username: appeal.username,
+                adminResponse: admin_response
+            }, getClientIp(req));
+
+            res.json({
+                success: true,
+                message: status === 'approved'
+                    ? 'Apel zaakceptowany, użytkownik został odbanowany'
+                    : 'Apel odrzucony',
+                data: appeal
+            });
+        } catch (error) {
+            return res.status(400).json({
+                success: false,
+                error: error.message
+            });
+        }
     })
 );
 

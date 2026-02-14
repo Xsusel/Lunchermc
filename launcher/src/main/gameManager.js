@@ -58,6 +58,11 @@ class GameManager {
         this.gameLogs = [];
         this.maxLogLines = 1000;
 
+        // Game log file management
+        this.currentLogStream = null;
+        this.currentLogFilePath = null;
+        this.maxLogSessions = 5;
+
         // Java auto-installer
         this.isInstallingJava = false;
     }
@@ -674,14 +679,163 @@ class GameManager {
      * Zapisuje linię logu z gry
      */
     addGameLog(line) {
-        this.gameLogs.push({
+        const logEntry = {
             time: new Date().toISOString(),
             line: line
-        });
+        };
 
-        // Ogranicz liczbę linii
+        this.gameLogs.push(logEntry);
+
+        // Ogranicz liczbę linii w pamięci
         if (this.gameLogs.length > this.maxLogLines) {
             this.gameLogs.shift();
+        }
+
+        // Zapisz do pliku
+        if (this.currentLogStream) {
+            try {
+                this.currentLogStream.write(`[${logEntry.time}] ${line}\n`);
+            } catch (e) {
+                // Ignoruj błędy zapisu logu
+            }
+        }
+
+        // Streamuj do renderera w real-time
+        this.sendToRenderer('game-log', logEntry);
+    }
+
+    /**
+     * Pobiera katalog logów gry
+     */
+    getLogsDir() {
+        const gamePath = this.getGamePath();
+        return path.join(gamePath, 'logs', 'launcher');
+    }
+
+    /**
+     * Rozpoczyna nową sesję logowania
+     */
+    startLogSession() {
+        const logsDir = this.getLogsDir();
+        this.ensureDir(logsDir);
+
+        // Rotacja logów - zachowaj ostatnie N sesji
+        this.rotateLogFiles();
+
+        // Utwórz nowy plik logu
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const logFileName = `game-${timestamp}.log`;
+        this.currentLogFilePath = path.join(logsDir, logFileName);
+
+        try {
+            this.currentLogStream = fs.createWriteStream(this.currentLogFilePath, { flags: 'w' });
+            this.currentLogStream.write(`=== XsusLauncher Game Log ===\n`);
+            this.currentLogStream.write(`Sesja rozpoczęta: ${new Date().toISOString()}\n`);
+            this.currentLogStream.write(`Platform: ${process.platform} ${process.arch}\n`);
+            this.currentLogStream.write(`Node: ${process.version}\n`);
+            this.currentLogStream.write(`============================\n\n`);
+            console.log(`Game log session started: ${this.currentLogFilePath}`);
+        } catch (e) {
+            console.error('Failed to create log file:', e);
+            this.currentLogStream = null;
+        }
+    }
+
+    /**
+     * Kończy sesję logowania
+     */
+    endLogSession(exitCode) {
+        if (this.currentLogStream) {
+            try {
+                this.currentLogStream.write(`\n============================\n`);
+                this.currentLogStream.write(`Sesja zakończona: ${new Date().toISOString()}\n`);
+                this.currentLogStream.write(`Kod wyjścia: ${exitCode}\n`);
+                if (this.gameStartTime) {
+                    const duration = Math.round((Date.now() - this.gameStartTime) / 1000);
+                    this.currentLogStream.write(`Czas trwania: ${duration}s\n`);
+                }
+                this.currentLogStream.write(`============================\n`);
+                this.currentLogStream.end();
+            } catch (e) {
+                console.error('Failed to close log stream:', e);
+            }
+            this.currentLogStream = null;
+        }
+    }
+
+    /**
+     * Rotacja plików logów - zachowaj ostatnie maxLogSessions sesji
+     */
+    rotateLogFiles() {
+        const logsDir = this.getLogsDir();
+        if (!fs.existsSync(logsDir)) return;
+
+        try {
+            const files = fs.readdirSync(logsDir)
+                .filter(f => f.startsWith('game-') && f.endsWith('.log'))
+                .map(f => ({
+                    name: f,
+                    path: path.join(logsDir, f),
+                    time: fs.statSync(path.join(logsDir, f)).mtime.getTime()
+                }))
+                .sort((a, b) => b.time - a.time); // Najnowsze pierwsze
+
+            // Usuń stare pliki (zachowaj maxLogSessions - 1, bo zaraz dodamy nowy)
+            const filesToKeep = this.maxLogSessions - 1;
+            if (files.length > filesToKeep) {
+                const filesToDelete = files.slice(filesToKeep);
+                for (const file of filesToDelete) {
+                    try {
+                        fs.unlinkSync(file.path);
+                        console.log(`Rotated old log: ${file.name}`);
+                    } catch (e) {
+                        console.warn(`Failed to delete old log: ${file.name}`, e);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Log rotation error:', e);
+        }
+    }
+
+    /**
+     * Pobiera listę dostępnych sesji logów
+     */
+    getLogSessions() {
+        const logsDir = this.getLogsDir();
+        if (!fs.existsSync(logsDir)) return [];
+
+        try {
+            return fs.readdirSync(logsDir)
+                .filter(f => f.startsWith('game-') && f.endsWith('.log'))
+                .map(f => {
+                    const filePath = path.join(logsDir, f);
+                    const stat = fs.statSync(filePath);
+                    return {
+                        filename: f,
+                        path: filePath,
+                        size: stat.size,
+                        created: stat.birthtime.toISOString(),
+                        modified: stat.mtime.toISOString()
+                    };
+                })
+                .sort((a, b) => new Date(b.created) - new Date(a.created)); // Najnowsze pierwsze
+        } catch (e) {
+            console.error('Error listing log sessions:', e);
+            return [];
+        }
+    }
+
+    /**
+     * Odczytuje zawartość pliku logu
+     */
+    readLogFile(filePath) {
+        if (!fs.existsSync(filePath)) return null;
+        try {
+            return fs.readFileSync(filePath, 'utf8');
+        } catch (e) {
+            console.error('Error reading log file:', e);
+            return null;
         }
     }
 
@@ -1125,11 +1279,24 @@ class GameManager {
     /**
      * Pobiera pełny URL (dodaje bazowy URL jeśli to URL względny)
      */
+    /**
+     * Rozwiązuje URL API z priorytetem:
+     * 1. electron-store config
+     * 2. Zmienna środowiskowa API_URL
+     * 3. Domyślny hardcoded URL
+     */
+    resolveApiUrl() {
+        const storeUrl = this.store.get('apiUrl');
+        if (storeUrl && storeUrl.trim()) return storeUrl.trim();
+        if (process.env.API_URL && process.env.API_URL.trim()) return process.env.API_URL.trim();
+        return 'https://mc.xsus.pl';
+    }
+
     getFullUrl(url) {
         if (!url) return null;
         // Jeśli URL jest względny (zaczyna się od /), dodaj bazowy URL
         if (url.startsWith('/')) {
-            const baseUrl = this.store.get('apiUrl') || 'https://mc.xsus.pl';
+            const baseUrl = this.resolveApiUrl();
             return `${baseUrl}${url}`;
         }
         return url;
@@ -1264,6 +1431,35 @@ class GameManager {
     }
 
     /**
+     * Weryfikuje integralność pliku porównując SHA256 hash
+     * @param {string} filePath - Ścieżka do pliku
+     * @param {string} expectedHash - Oczekiwany hash SHA256 (hex)
+     * @returns {Promise<{valid: boolean, actualHash: string, expectedHash: string, error?: string}>}
+     */
+    async verifyFileHash(filePath, expectedHash) {
+        if (!filePath || !expectedHash) {
+            return { valid: false, actualHash: null, expectedHash, error: 'Missing filePath or expectedHash' };
+        }
+
+        if (!fs.existsSync(filePath)) {
+            return { valid: false, actualHash: null, expectedHash, error: 'File does not exist' };
+        }
+
+        try {
+            const actualHash = await this.calculateFileHash(filePath);
+            const valid = actualHash === expectedHash.toLowerCase();
+
+            if (!valid) {
+                console.warn(`[Hash Mismatch] ${path.basename(filePath)}: expected=${expectedHash}, actual=${actualHash}`);
+            }
+
+            return { valid, actualHash, expectedHash: expectedHash.toLowerCase() };
+        } catch (error) {
+            return { valid: false, actualHash: null, expectedHash, error: error.message };
+        }
+    }
+
+    /**
      * Sprawdza czy plik wymaga pobrania (nie istnieje lub zły hash)
      */
     async checkFileNeedsDownload(file, destPath) {
@@ -1291,16 +1487,33 @@ class GameManager {
 
         // Weryfikuj SHA256 hash po pobraniu
         if (file.sha256) {
-            const downloadedHash = await this.calculateFileHash(destPath);
-            if (downloadedHash !== file.sha256) {
-                console.error(`SHA256 mismatch for ${path.basename(destPath)}: expected ${file.sha256}, got ${downloadedHash}`);
+            const verification = await this.verifyFileHash(destPath, file.sha256);
+
+            if (!verification.valid) {
+                const fileName = path.basename(destPath);
+                console.error(`SHA256 mismatch for ${fileName}: expected ${file.sha256}, got ${verification.actualHash}`);
+
+                // Powiadom renderer o błędzie weryfikacji
+                this.sendToRenderer('file-verify-error', {
+                    filename: fileName,
+                    expected: file.sha256,
+                    actual: verification.actualHash,
+                    error: verification.error
+                });
+
                 // Usuń wadliwy plik i pliki towarzyszące
                 try { fs.unlinkSync(destPath); } catch (e) {}
                 try { fs.unlinkSync(destPath + '.progress'); } catch (e) {}
                 try { fs.unlinkSync(destPath + '.partial'); } catch (e) {}
-                throw new Error(`Hash verification failed for ${path.basename(destPath)}`);
+                throw new Error(`Hash verification failed for ${fileName}: expected=${file.sha256.substring(0, 12)}..., got=${(verification.actualHash || 'null').substring(0, 12)}...`);
             }
             console.log(`SHA256 verified for ${path.basename(destPath)}`);
+
+            // Powiadom renderer o pomyślnej weryfikacji
+            this.sendToRenderer('file-verified', {
+                filename: path.basename(destPath),
+                hash: verification.actualHash
+            });
         }
 
         // Upewnij się że .progress jest usunięty po pomyślnej weryfikacji
@@ -1507,6 +1720,9 @@ class GameManager {
         this.gameLogs = []; // Reset logów
         this.gameStartTime = Date.now();
 
+        // Rozpocznij sesję logów
+        this.startLogSession();
+
         // Przechowaj config dla crash reportera
         this.currentGameConfig = config;
 
@@ -1525,49 +1741,54 @@ class GameManager {
             // Sprawdź Java
             this.sendToRenderer('game-status', { status: 'Wykrywanie Java...' });
 
-            let javaPath = this.store.get('javaPath');
-            if (!javaPath) {
-                // Najpierw sprawdź czy mamy zainstalowaną przez launcher
-                const installedJava = this.getInstalledJavaPath();
-                if (installedJava) {
-                    const javaInfo = await this.getJavaVersion(installedJava);
-                    if (javaInfo) {
-                        javaPath = installedJava;
-                        console.log(`Using launcher-installed Java ${javaInfo.version}`);
-                    }
+            let javaPath;
+
+            // Deleguj do JavaManager jeśli dostępny
+            if (this.javaManager) {
+                try {
+                    javaPath = await this.javaManager.ensureJava(config.gameVersion);
+                } catch (error) {
+                    throw new Error(`Nie znaleziono Java i nie udało się jej zainstalować: ${error.message}`);
                 }
-
-                // Jeśli nie, szukaj w systemie
+            } else {
+                // Fallback - stara logika
+                javaPath = this.store.get('javaPath');
                 if (!javaPath) {
-                    const bestJava = await this.getBestJavaForVersion(config.gameVersion);
-                    if (bestJava) {
-                        javaPath = bestJava.path;
-                        // Zapisz wykryta sciezke Java do store
-                        this.store.set('javaPath', javaPath);
-                        console.log(`Using Java ${bestJava.version} from ${javaPath} (saved to store)`);
-                    }
-                }
-
-                // Jeśli nadal brak - auto-instaluj
-                if (!javaPath) {
-                    console.log('No Java found, auto-installing...');
-
-                    // Określ wymaganą wersję Java na podstawie wersji MC
-                    const [major, minor] = config.gameVersion.split('.').map(Number);
-                    let requiredJava = 17;
-                    if (major >= 1 && minor >= 20 && config.gameVersion.includes('.5')) {
-                        requiredJava = 21;
-                    } else if (major >= 1 && minor >= 18) {
-                        requiredJava = 17;
+                    const installedJava = this.getInstalledJavaPath();
+                    if (installedJava) {
+                        const javaInfo = await this.getJavaVersion(installedJava);
+                        if (javaInfo) {
+                            javaPath = installedJava;
+                            console.log(`Using launcher-installed Java ${javaInfo.version}`);
+                        }
                     }
 
-                    try {
-                        javaPath = await this.autoInstallJava(requiredJava);
-                        // Zapisz sciezke do store zeby nie musiec szukac/instalowac ponownie
-                        this.store.set('javaPath', javaPath);
-                        console.log(`Java path saved to store: ${javaPath}`);
-                    } catch (installError) {
-                        throw new Error(`Nie znaleziono Java i nie udało się jej zainstalować: ${installError.message}`);
+                    if (!javaPath) {
+                        const bestJava = await this.getBestJavaForVersion(config.gameVersion);
+                        if (bestJava) {
+                            javaPath = bestJava.path;
+                            this.store.set('javaPath', javaPath);
+                            console.log(`Using Java ${bestJava.version} from ${javaPath} (saved to store)`);
+                        }
+                    }
+
+                    if (!javaPath) {
+                        console.log('No Java found, auto-installing...');
+                        const [major, minor] = config.gameVersion.split('.').map(Number);
+                        let requiredJava = 17;
+                        if (major >= 1 && minor >= 20 && config.gameVersion.includes('.5')) {
+                            requiredJava = 21;
+                        } else if (major >= 1 && minor >= 18) {
+                            requiredJava = 17;
+                        }
+
+                        try {
+                            javaPath = await this.autoInstallJava(requiredJava);
+                            this.store.set('javaPath', javaPath);
+                            console.log(`Java path saved to store: ${javaPath}`);
+                        } catch (installError) {
+                            throw new Error(`Nie znaleziono Java i nie udało się jej zainstalować: ${installError.message}`);
+                        }
                     }
                 }
             }
@@ -1803,6 +2024,9 @@ class GameManager {
                     this.gameProcess.on('close', async (code) => {
                         console.log(`Game process closed with code: ${code}`);
 
+                        // Zakończ sesję logów
+                        this.endLogSession(code);
+
                         // Sprawdź czy to crash
                         const crashResult = await this.handleGameClose(code, this.currentGameConfig);
 
@@ -1875,35 +2099,7 @@ class GameManager {
      * Rejestruje handlery IPC
      */
     registerIPCHandlers() {
-        // Wykrywanie Java
-        ipcMain.handle('detect-java', async () => {
-            return this.detectJava();
-        });
-
-        // Sprawdzenie konkretnej wersji Java
-        ipcMain.handle('check-java', async (event, javaPath) => {
-            return this.getJavaVersion(javaPath);
-        });
-
-        // Auto-instalacja Java
-        ipcMain.handle('auto-install-java', async (event, version = 17) => {
-            try {
-                const javaPath = await this.autoInstallJava(version);
-                return { success: true, javaPath };
-            } catch (error) {
-                return { success: false, error: error.message };
-            }
-        });
-
-        // Sprawdź zainstalowaną przez launcher Javę
-        ipcMain.handle('get-installed-java', async () => {
-            const javaPath = this.getInstalledJavaPath();
-            if (javaPath) {
-                const info = await this.getJavaVersion(javaPath);
-                return { installed: true, path: javaPath, info };
-            }
-            return { installed: false };
-        });
+        // Java handlers zarejestrowane w JavaManager (detect-java, check-java, auto-install-java, get-installed-java)
 
         // Uruchomienie gry
         ipcMain.handle('launch-game', async (event, config) => {
@@ -1931,6 +2127,11 @@ class GameManager {
                 return this.calculateFileHash(filePath);
             }
             return null;
+        });
+
+        // Weryfikuj hash pliku po pobraniu
+        ipcMain.handle('verify-file-hash', async (event, filePath, expectedHash) => {
+            return this.verifyFileHash(filePath, expectedHash);
         });
 
         // Sprawdź czy plik istnieje
@@ -1972,6 +2173,34 @@ class GameManager {
                 osRelease: os.release(),
                 hostname: os.hostname()
             };
+        });
+
+        // ============================================
+        // GAME LOGS HANDLERY
+        // ============================================
+
+        // Pobierz listę sesji logów
+        ipcMain.handle('get-log-sessions', async () => {
+            return this.getLogSessions();
+        });
+
+        // Odczytaj plik logu
+        ipcMain.handle('read-log-file', async (event, filePath) => {
+            return this.readLogFile(filePath);
+        });
+
+        // Pobierz bieżące logi z pamięci
+        ipcMain.handle('get-current-logs', async () => {
+            return this.gameLogs;
+        });
+
+        // Otwórz folder logów
+        ipcMain.handle('open-logs-folder', async () => {
+            const { shell } = require('electron');
+            const logsDir = this.getLogsDir();
+            this.ensureDir(logsDir);
+            shell.openPath(logsDir);
+            return { success: true };
         });
 
         // Crash reports handled by CrashReporter module (crashReporter.js)

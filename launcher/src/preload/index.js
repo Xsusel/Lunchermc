@@ -94,7 +94,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Synchronizacja plikow
     syncMods: (mods) => ipcRenderer.invoke('sync-mods', mods),
     getFileHash: (filePath) => ipcRenderer.invoke('get-file-hash', filePath),
+    verifyFileHash: (filePath, expectedHash) => ipcRenderer.invoke('verify-file-hash', filePath, expectedHash),
     fileExists: (filePath) => ipcRenderer.invoke('file-exists', filePath),
+
+    // ============================================
+    // GAME LOGS
+    // ============================================
+    getLogSessions: () => ipcRenderer.invoke('get-log-sessions'),
+    readLogFile: (filePath) => ipcRenderer.invoke('read-log-file', filePath),
+    getCurrentLogs: () => ipcRenderer.invoke('get-current-logs'),
+    openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+    onGameLog: (callback) => {
+        ipcRenderer.on('game-log', (event, data) => callback(data));
+    },
 
     // Eventy gry
     onGameOutput: (callback) => {
@@ -111,6 +123,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     onGameStatus: (callback) => {
         ipcRenderer.on('game-status', (event, data) => callback(data));
+    },
+    onFileVerified: (callback) => {
+        ipcRenderer.on('file-verified', (event, data) => callback(data));
+    },
+    onFileVerifyError: (callback) => {
+        ipcRenderer.on('file-verify-error', (event, data) => callback(data));
     },
 
     // Usuwanie listenerów
@@ -140,6 +158,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getChangelogVersion: (version) => ipcRenderer.invoke('get-changelog-version', version),
     shouldShowChangelog: () => ipcRenderer.invoke('should-show-changelog'),
     markChangelogSeen: () => ipcRenderer.invoke('mark-changelog-seen'),
+
+    // ============================================
+    // API URL
+    // ============================================
+    getApiUrl: () => ipcRenderer.invoke('get-api-url'),
+    setApiUrl: (url) => ipcRenderer.invoke('set-api-url', url),
 
     // ============================================
     // MOTYWY

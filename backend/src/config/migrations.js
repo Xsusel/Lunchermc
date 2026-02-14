@@ -128,6 +128,86 @@ const migrations = [
             CREATE INDEX IF NOT EXISTS idx_sessions_ip ON sessions(ip_address);
         `,
     },
+
+    // ------------------------------------------------------------------
+    // 8. ban_appeals_v2 table (standalone ban appeal system)
+    // ------------------------------------------------------------------
+    {
+        id: 8,
+        name: 'create_ban_appeals_v2_table',
+        sql: `
+            CREATE TABLE IF NOT EXISTS ban_appeals_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_response TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_ban_appeals_v2_user ON ban_appeals_v2(user_id);
+            CREATE INDEX IF NOT EXISTS idx_ban_appeals_v2_status ON ban_appeals_v2(status);
+        `,
+    },
+
+    // ------------------------------------------------------------------
+    // 9. user account lockout columns (failed_attempts, locked_until)
+    // ------------------------------------------------------------------
+    {
+        id: 9,
+        name: 'add_user_lockout_columns',
+        sql: `
+            ALTER TABLE users ADD COLUMN failed_attempts INTEGER DEFAULT 0;
+            ALTER TABLE users ADD COLUMN locked_until DATETIME;
+        `,
+    },
+
+    // ------------------------------------------------------------------
+    // 10. mods download_count column
+    // ------------------------------------------------------------------
+    {
+        id: 10,
+        name: 'add_mods_download_count',
+        sql: `
+            ALTER TABLE mods ADD COLUMN download_count INTEGER DEFAULT 0;
+        `,
+    },
+
+    // ------------------------------------------------------------------
+    // 11. user email column
+    // ------------------------------------------------------------------
+    {
+        id: 11,
+        name: 'add_user_email_column',
+        sql: `
+            ALTER TABLE users ADD COLUMN email TEXT;
+            CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+        `,
+    },
+
+    // ------------------------------------------------------------------
+    // 12. crash_reports table
+    // ------------------------------------------------------------------
+    {
+        id: 12,
+        name: 'create_crash_reports_table',
+        sql: `
+            CREATE TABLE IF NOT EXISTS crash_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                error_type TEXT NOT NULL,
+                error_message TEXT,
+                stack_trace TEXT,
+                system_info TEXT,
+                launcher_version TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_crash_reports_user ON crash_reports(user_id);
+            CREATE INDEX IF NOT EXISTS idx_crash_reports_created ON crash_reports(created_at);
+        `,
+    },
 ];
 
 // ============================================

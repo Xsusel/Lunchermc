@@ -9,6 +9,7 @@ validateEnvironment();
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import morgan from 'morgan';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -24,6 +25,7 @@ import wsManager from './utils/wsManager.js';
 import { ScheduledMaintenance, Server } from './models/index.js';
 import { createLogger } from './utils/logger.js';
 import { runMigrations } from './config/migrations.js';
+import { notifyServerStart } from './utils/discord.js';
 
 const log = createLogger('Server');
 
@@ -77,6 +79,15 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// Kompresja odpowiedzi (gzip/brotli)
+app.use(compression({
+    threshold: 1024, // Kompresuj odpowiedzi > 1KB
+    filter: (req, res) => {
+        if (req.headers['x-no-compression']) return false;
+        return compression.filter(req, res);
+    }
+}));
+
 // Parsowanie JSON i form data
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -123,13 +134,127 @@ app.get('/api', (req, res) => {
     res.json({
         success: true,
         message: 'Minecraft Launcher API',
-        version: '1.0.0',
+        version: '1.1.0',
         endpoints: {
             auth: '/api/auth',
             launcher: '/api/launcher',
             admin: '/api/admin',
             download: '/api/download',
-            skins: '/api/skins'
+            skins: '/api/skins',
+            docs: '/api/docs'
+        }
+    });
+});
+
+// ============================================
+// DOKUMENTACJA API (OpenAPI-style)
+// ============================================
+app.get('/api/docs', (req, res) => {
+    res.json({
+        openapi: '3.0.3',
+        info: {
+            title: 'XsusLauncher API',
+            version: '1.1.0',
+            description: 'API dla niestandardowego launchera Minecraft (Non-Premium)'
+        },
+        paths: {
+            '/api/auth/register': {
+                post: { summary: 'Rejestracja gracza', tags: ['Auth'],
+                    requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { username: { type: 'string', minLength: 3, maxLength: 16 }, password: { type: 'string', minLength: 8 }, captcha_id: { type: 'string' }, captcha_answer: { type: 'string' } }, required: ['username', 'password'] } } } } }
+            },
+            '/api/auth/login': {
+                post: { summary: 'Logowanie gracza', tags: ['Auth'],
+                    requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { username: { type: 'string' }, password: { type: 'string' } }, required: ['username', 'password'] } } } } }
+            },
+            '/api/auth/verify': {
+                post: { summary: 'Weryfikacja tokenu', tags: ['Auth'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/auth/me': {
+                get: { summary: 'Dane zalogowanego użytkownika', tags: ['Auth'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/auth/change-password': {
+                post: { summary: 'Zmiana hasła', tags: ['Auth'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/auth/forgot-password': {
+                post: { summary: 'Pobierz pytanie bezpieczeństwa', tags: ['Auth'] }
+            },
+            '/api/auth/reset-password': {
+                post: { summary: 'Reset hasła (pytanie bezpieczeństwa)', tags: ['Auth'] }
+            },
+            '/api/auth/captcha': {
+                get: { summary: 'Pobierz wyzwanie CAPTCHA', tags: ['Auth'] }
+            },
+            '/api/auth/appeal': {
+                post: { summary: 'Złóż apelację od bana', tags: ['Auth'] }
+            },
+            '/api/launcher/config': {
+                get: { summary: 'Konfiguracja gry (wersja, mody, broadcasts)', tags: ['Launcher'] }
+            },
+            '/api/launcher/manifest': {
+                get: { summary: 'Manifest plików do synchronizacji', tags: ['Launcher'] }
+            },
+            '/api/launcher/verify-files': {
+                post: { summary: 'Weryfikacja integralności plików', tags: ['Launcher'] }
+            },
+            '/api/launcher/news': {
+                get: { summary: 'Lista newsów', tags: ['Launcher'] }
+            },
+            '/api/download/mods/:filename': {
+                get: { summary: 'Pobierz plik moda', tags: ['Download'] }
+            },
+            '/api/download/launcher/:filename': {
+                get: { summary: 'Pobierz plik launchera (auto-update)', tags: ['Download'] }
+            },
+            '/api/download/skins/:filename': {
+                get: { summary: 'Pobierz skin gracza', tags: ['Download'] }
+            },
+            '/api/skins/upload': {
+                post: { summary: 'Upload skina', tags: ['Skins'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/admin/login': {
+                post: { summary: 'Logowanie admina', tags: ['Admin'] }
+            },
+            '/api/admin/dashboard': {
+                get: { summary: 'Statystyki dashboard', tags: ['Admin'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/admin/users': {
+                get: { summary: 'Lista graczy', tags: ['Admin'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/admin/config': {
+                get: { summary: 'Konfiguracja gry', tags: ['Admin'], security: [{ bearerAuth: [] }] },
+                put: { summary: 'Aktualizuj konfigurację', tags: ['Admin'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/admin/mods': {
+                get: { summary: 'Lista modów', tags: ['Admin'], security: [{ bearerAuth: [] }] },
+                post: { summary: 'Dodaj moda', tags: ['Admin'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/admin/backups': {
+                get: { summary: 'Lista backupów', tags: ['Admin'], security: [{ bearerAuth: [] }] },
+                post: { summary: 'Utwórz backup', tags: ['Admin'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/admin/appeals': {
+                get: { summary: 'Lista apelacji od banów', tags: ['Admin'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/admin/stats/overview': {
+                get: { summary: 'Statystyki systemowe', tags: ['Admin'], security: [{ bearerAuth: [] }] }
+            },
+            '/api/versions/minecraft': {
+                get: { summary: 'Lista wersji Minecraft', tags: ['Versions'] }
+            },
+            '/api/versions/forge/:mcVersion': {
+                get: { summary: 'Wersje Forge dla MC', tags: ['Versions'] }
+            },
+            '/api/health': {
+                get: { summary: 'Health check', tags: ['System'] }
+            },
+            '/api/health/detailed': {
+                get: { summary: 'Rozszerzony health check', tags: ['System'] }
+            }
+        },
+        components: {
+            securitySchemes: {
+                bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }
+            }
         }
     });
 });
@@ -347,6 +472,9 @@ server.listen(PORT, () => {
 
     // Uruchom scheduler dla scheduled maintenance
     startMaintenanceScheduler();
+
+    // Powiadomienie Discord o starcie serwera (async, nie blokuje)
+    notifyServerStart().catch(() => {});
 });
 
 // ============================================

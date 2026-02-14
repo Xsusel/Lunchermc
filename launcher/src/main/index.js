@@ -6,6 +6,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 const GameManager = require('./gameManager');
+const JavaManager = require('./javaManager');
 const CrashReporter = require('./crashReporter');
 const { getChangelog, getLatestChangelog } = require('./changelog');
 const { getAvailableThemes, getTheme, getThemeVariables } = require('./themes');
@@ -22,6 +23,22 @@ try {
 } catch (e) {
     console.warn('electron-updater not available, using custom updater');
     autoUpdater = null;
+}
+
+// Domyślny URL API
+const DEFAULT_API_URL = 'https://mc.xsus.pl';
+
+/**
+ * Rozwiązuje URL API z priorytetem:
+ * 1. electron-store config
+ * 2. Zmienna środowiskowa API_URL
+ * 3. Domyślny hardcoded URL
+ */
+function resolveApiUrl() {
+    const storeUrl = store.get('apiUrl');
+    if (storeUrl && storeUrl.trim()) return storeUrl.trim();
+    if (process.env.API_URL && process.env.API_URL.trim()) return process.env.API_URL.trim();
+    return DEFAULT_API_URL;
 }
 
 // Konfiguracja przechowywania ustawień
@@ -50,7 +67,7 @@ const store = new Store({
         gamePath: '',
 
         // URL API serwera
-        apiUrl: 'https://mc.xsus.pl',
+        apiUrl: '',
 
         // Ustawienia launchera
         launcherVersion: '1.0.0',
@@ -65,6 +82,7 @@ const store = new Store({
 // Referencja do głównego okna
 let mainWindow = null;
 let gameManager = null;
+let javaManager = null;
 let crashReporter = null;
 
 // Ścieżka do danych gry
@@ -125,9 +143,16 @@ function createWindow() {
     crashReporter = new CrashReporter(store, mainWindow);
     crashReporter.initialize();
 
+    // Inicjalizuj JavaManager
+    javaManager = new JavaManager(store, mainWindow);
+    javaManager.registerIPCHandlers();
+
     // Inicjalizuj GameManager
     gameManager = new GameManager(store, mainWindow);
     gameManager.registerIPCHandlers();
+
+    // Przekaz java manager do game managera
+    gameManager.javaManager = javaManager;
 
     // Przekaz crash reporter do game managera (aby moc podpiac sie pod proces gry)
     gameManager.crashReporter = crashReporter;
@@ -234,6 +259,25 @@ ipcMain.handle('get-launcher-version', () => {
     return app.getVersion();
 });
 
+// Pobieranie rozwiązanego URL API
+ipcMain.handle('get-api-url', () => {
+    return resolveApiUrl();
+});
+
+// Ustawianie URL API
+ipcMain.handle('set-api-url', (event, url) => {
+    if (url && url.trim()) {
+        // Usuń trailing slash
+        const cleanUrl = url.trim().replace(/\/+$/, '');
+        store.set('apiUrl', cleanUrl);
+        return { success: true, apiUrl: cleanUrl };
+    } else {
+        // Resetuj do domyślnego (wyczyść store, użyje env lub default)
+        store.set('apiUrl', '');
+        return { success: true, apiUrl: resolveApiUrl() };
+    }
+});
+
 // ============================================
 // INICJALIZACJA APLIKACJI
 // ============================================
@@ -263,7 +307,7 @@ let pendingUpdatePath = null;
 // Sprawdza aktualizacje z API serwera
 async function checkForUpdates() {
     try {
-        const apiUrl = store.get('apiUrl') || 'https://mc.xsus.pl';
+        const apiUrl = resolveApiUrl();
         const currentVersion = app.getVersion();
         const url = `${apiUrl}/api/launcher/check-update?version=${currentVersion}`;
 
@@ -437,7 +481,7 @@ if (autoUpdater) {
 // Sprawdza czy API jest dostępne (ping)
 ipcMain.handle('check-online-status', async () => {
     try {
-        const apiUrl = store.get('apiUrl') || 'https://mc.xsus.pl';
+        const apiUrl = resolveApiUrl();
         const url = `${apiUrl}/api/launcher/config`;
         const response = await fetchJson(url);
 

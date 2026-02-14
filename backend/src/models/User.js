@@ -59,15 +59,34 @@ class User {
         const user = this.findByUsername(username);
         if (!user) return null;
 
+        // Sprawdź blokadę konta po zbyt wielu nieudanych próbach
+        if (user.locked_until) {
+            const lockTime = new Date(user.locked_until);
+            if (lockTime > new Date()) {
+                return { locked: true, locked_until: user.locked_until };
+            }
+            // Blokada minęła - resetuj
+            db.prepare('UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?').run(user.id);
+        }
+
         const isValid = bcrypt.compareSync(password, user.password_hash);
-        if (!isValid) return null;
+        if (!isValid) {
+            const attempts = (user.failed_attempts || 0) + 1;
+            const MAX_ATTEMPTS = 5;
+            const LOCK_MINUTES = 15;
 
-        // Aktualizujemy ostatnie logowanie
-        db.prepare(`
-            UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?
-        `).run(user.id);
+            if (attempts >= MAX_ATTEMPTS) {
+                const lockUntil = new Date(Date.now() + LOCK_MINUTES * 60 * 1000).toISOString();
+                db.prepare('UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?').run(attempts, lockUntil, user.id);
+                return { locked: true, locked_until: lockUntil };
+            }
+            db.prepare('UPDATE users SET failed_attempts = ? WHERE id = ?').run(attempts, user.id);
+            return null;
+        }
 
-        // Zwracamy użytkownika bez hasła
+        // Sukces - resetuj licznik prób
+        db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP, failed_attempts = 0, locked_until = NULL WHERE id = ?').run(user.id);
+
         const { password_hash, ...userWithoutPassword } = user;
         return userWithoutPassword;
     }
@@ -79,12 +98,15 @@ class User {
      * @returns {array} Lista użytkowników
      */
     static getAll(limit = 50, offset = 0) {
+        // Hard limit zapobiega nadużyciu pamięci
+        const safeLimit = Math.min(Math.max(1, parseInt(limit) || 50), 200);
+        const safeOffset = Math.max(0, parseInt(offset) || 0);
         return db.prepare(`
             SELECT id, username, is_banned, ban_reason, created_at, last_login, total_playtime
             FROM users
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
-        `).all(limit, offset);
+        `).all(safeLimit, safeOffset);
     }
 
     /**

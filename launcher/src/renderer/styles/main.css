@@ -2011,3 +2011,128 @@ body {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
 }
+
+/* ============================================
+   LOGI GRY
+   ============================================ */
+
+#page-logs {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+#page-logs .page-title {
+    flex-shrink: 0;
+}
+
+.logs-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0 12px;
+    gap: 12px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.logs-session-select {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.logs-session-select label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.logs-session-select .select-input {
+    min-width: 220px;
+}
+
+.logs-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.logs-actions .btn-sm {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.logs-autoscroll {
+    font-size: 12px;
+    margin-left: 4px;
+}
+
+.logs-container {
+    flex: 1;
+    background: #0d0d0d;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+}
+
+.logs-output {
+    padding: 8px 12px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.logs-empty {
+    color: var(--text-muted);
+    padding: 40px;
+    text-align: center;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 14px;
+}
+
+.log-entry {
+    display: flex;
+    gap: 8px;
+    padding: 1px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+.log-entry:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.log-time {
+    color: var(--text-muted);
+    font-size: 11px;
+    flex-shrink: 0;
+    min-width: 65px;
+    opacity: 0.7;
+}
+
+.log-text {
+    color: var(--text-secondary);
+    flex: 1;
+    min-width: 0;
+}
+
+.log-entry.log-error .log-text {
+    color: var(--error);
+}
+
+.log-entry.log-warn .log-text {
+    color: var(--warning);
+}
+
+.log-entry.log-info .log-text {
+    color: var(--text-primary);
+}
