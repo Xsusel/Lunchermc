@@ -1,9 +1,14 @@
 # ============================================
 # XsusLauncher - Docker Compose
 # Konfiguracja dla API i Panelu Administracyjnego
+#
+# OPCJONALNIE: Utwórz .env aby nadpisać domyślne wartości:
+#   cp .env.example .env && nano .env
+#
+# Bez .env system startuje z domyślnymi ustawieniami:
+#   - JWT_SECRET auto-generowany (zapisywany w data/db/.jwt_secret)
+#   - Admin: admin/admin (zmień po pierwszym logowaniu)
 # ============================================
-
-version: '3.8'
 
 services:
   # ============================================
@@ -15,12 +20,21 @@ services:
       dockerfile: Dockerfile
     container_name: xsuslauncher-api
     restart: unless-stopped
-    env_file:
-      - ./backend/.env
     environment:
-      # Nadpisz ścieżki dla Docker
+      - NODE_ENV=production
+      - PORT=3001
+      - JWT_SECRET=${JWT_SECRET:-}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - DATABASE_PATH=/app/data/launcher.db
+      - MC_SERVER_IP=${MC_SERVER_IP:-xsus.pl}
+      - MC_SERVER_PORT=${MC_SERVER_PORT:-25568}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - CURSEFORGE_API_KEY=${CURSEFORGE_API_KEY:-}
       - BACKUP_DIR=/app/data/backups
+      - ADMIN_URL=${ADMIN_URL:-}
+      - API_URL=${API_URL:-}
     volumes:
       # Dane persistentne
       - ./data/db:/app/data
@@ -91,11 +105,3 @@ services:
 networks:
   xsuslauncher-network:
     driver: bridge
-
-# ============================================
-# WOLUMENY
-# ============================================
-volumes:
-  db-data:
-  uploads-data:
-  backups-data:

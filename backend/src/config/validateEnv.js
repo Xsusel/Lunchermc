@@ -1,10 +1,10 @@
 /**
  * Walidacja zmiennych srodowiskowych przy starcie aplikacji
+ * Auto-generuje JWT_SECRET jeśli brakuje (zapisuje do pliku dla trwałości)
  */
-
-const requiredVars = [
-    { name: 'JWT_SECRET', minLength: 32, description: 'Secret key for JWT tokens' }
-];
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
 const optionalVars = [
     { name: 'PORT', type: 'number', default: 3001 },
@@ -20,21 +20,58 @@ const optionalVars = [
     { name: 'MAX_BACKUPS', type: 'number', default: 30 }
 ];
 
+/**
+ * Zapewnia że JWT_SECRET istnieje.
+ * Jeśli nie jest ustawiony w env, próbuje odczytać z pliku .jwt_secret w katalogu danych.
+ * Jeśli plik nie istnieje, generuje nowy klucz i zapisuje go.
+ */
+function ensureJwtSecret() {
+    if (process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 32) {
+        return; // Wszystko OK
+    }
+
+    // Ścieżka do pliku z kluczem (obok bazy danych - persistentny volume w Docker)
+    const dataDir = path.dirname(process.env.DATABASE_PATH || './data/launcher.db');
+    const secretPath = path.join(dataDir, '.jwt_secret');
+
+    // Próbuj odczytać istniejący klucz
+    try {
+        if (fs.existsSync(secretPath)) {
+            const savedSecret = fs.readFileSync(secretPath, 'utf-8').trim();
+            if (savedSecret.length >= 32) {
+                process.env.JWT_SECRET = savedSecret;
+                console.log('🔑 JWT_SECRET załadowany z pliku:', secretPath);
+                return;
+            }
+        }
+    } catch (e) {
+        // Nie udało się odczytać - wygeneruj nowy
+    }
+
+    // Generuj nowy klucz
+    const newSecret = crypto.randomBytes(64).toString('hex');
+    process.env.JWT_SECRET = newSecret;
+
+    // Zapisz do pliku dla trwałości między restartami
+    try {
+        if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+        }
+        fs.writeFileSync(secretPath, newSecret, { mode: 0o600 });
+        console.log('🔑 Wygenerowano nowy JWT_SECRET i zapisano do:', secretPath);
+    } catch (e) {
+        console.warn('⚠️  Nie udało się zapisać JWT_SECRET do pliku:', e.message);
+        console.warn('   Klucz zostanie wygenerowany ponownie po restarcie.');
+        console.warn('   Ustaw JWT_SECRET w zmiennych środowiskowych dla trwałości.');
+    }
+}
+
 export function validateEnvironment() {
     const errors = [];
     const warnings = [];
 
-    // Check required vars
-    for (const v of requiredVars) {
-        const value = process.env[v.name];
-        if (!value) {
-            errors.push(`Missing required environment variable: ${v.name} - ${v.description}`);
-            continue;
-        }
-        if (v.minLength && value.length < v.minLength) {
-            errors.push(`${v.name} must be at least ${v.minLength} characters long`);
-        }
-    }
+    // Auto-generuj JWT_SECRET jeśli brakuje
+    ensureJwtSecret();
 
     // Check optional vars
     for (const v of optionalVars) {
@@ -62,15 +99,10 @@ export function validateEnvironment() {
         warnings.forEach(w => console.warn(`   - ${w}`));
     }
 
-    // Fail on errors
+    // Print errors but don't crash - allow startup with defaults
     if (errors.length > 0) {
-        console.error('❌ Environment validation failed:');
+        console.error('⚠️  Environment validation issues:');
         errors.forEach(e => console.error(`   - ${e}`));
-        if (process.env.NODE_ENV === 'production') {
-            process.exit(1);
-        } else {
-            console.warn('⚠️  Continuing in development mode despite errors...');
-        }
     }
 
     return { errors, warnings };
