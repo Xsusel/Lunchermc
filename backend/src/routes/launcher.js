@@ -8,7 +8,7 @@ import path from 'path';
 import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog, ServerRules, News, Server } from '../models/index.js';
 import { authenticateUser, optionalAuth } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { getClientIp, getUploadsPath } from '../utils/helpers.js';
+import { getClientIp, getUploadsPath, getServerSubPath, calculateSHA256 } from '../utils/helpers.js';
 import { pingMinecraftServer, simplePing } from '../utils/mcPing.js';
 import db from '../config/database.js';
 
@@ -17,6 +17,44 @@ const serverStatusCaches = {};
 const CACHE_TTL = 30000; // 30 sekund
 
 const router = Router();
+
+/**
+ * Skanuje folder serwera i zwraca listę plików do synchronizacji
+ * Używane do włączenia configów, resourcepacków itp. do manifestu launchera
+ */
+function scanServerFolderFiles(serverId) {
+    const fileTypes = ['config', 'resourcepacks', 'shaderpacks', 'scripts', 'kubejs'];
+    const files = [];
+
+    for (const type of fileTypes) {
+        const folderPath = getServerSubPath(serverId, type);
+        if (!fs.existsSync(folderPath)) continue;
+
+        const scanDir = (dir) => {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    scanDir(fullPath);
+                } else {
+                    const relativePath = path.relative(folderPath, fullPath);
+                    const stat = fs.statSync(fullPath);
+                    files.push({
+                        type,
+                        path: `${type}/${relativePath}`,
+                        filename: entry.name,
+                        url: `/api/download/servers/${serverId}/files/${type}/${relativePath}`,
+                        size: stat.size,
+                        required: true
+                    });
+                }
+            }
+        };
+        scanDir(folderPath);
+    }
+
+    return files;
+}
 
 /**
  * GET /api/launcher/config
@@ -65,6 +103,12 @@ router.get('/config', asyncHandler(async (req, res) => {
         }
     }
 
+    // Pobierz pliki z folderów serwera (config, resourcepacks, etc.)
+    let serverFolderFiles = [];
+    if (targetServer) {
+        serverFolderFiles = scanServerFolderFiles(targetServer.id);
+    }
+
     // Połącz wszystko w jedną listę plików
     const files = [
         ...mods.map(m => ({
@@ -84,7 +128,8 @@ router.get('/config', asyncHandler(async (req, res) => {
             sha256: f.sha256,
             size: f.file_size,
             required: !!f.is_required
-        }))
+        })),
+        ...serverFolderFiles,
     ];
 
     res.json({
@@ -298,19 +343,34 @@ router.get('/manifest', asyncHandler(async (req, res) => {
         mods = Mod.getForLauncher();
     }
 
+    // Scan server folder files (config, resourcepacks, etc.)
+    let serverFolderFiles = [];
+    if (targetServer) {
+        serverFolderFiles = scanServerFolderFiles(targetServer.id);
+    }
+
     const manifest = {
         serverId: targetServer?.id || null,
         version: config.gameVersion,
         loaderType: config.loaderType,
         forgeVersion: config.forgeVersion,
         fabricVersion: config.fabricVersion,
-        files: mods.map(mod => ({
-            path: `mods/${mod.filename}`,
-            url: mod.url,
-            sha256: mod.sha256,
-            size: mod.fileSize,
-            required: mod.required
-        })),
+        neoforgeVersion: config.neoforgeVersion,
+        files: [
+            ...mods.map(mod => ({
+                path: `mods/${mod.filename}`,
+                url: mod.url,
+                sha256: mod.sha256,
+                size: mod.fileSize,
+                required: mod.required
+            })),
+            ...serverFolderFiles.map(f => ({
+                path: f.path,
+                url: f.url,
+                size: f.size,
+                required: f.required
+            })),
+        ],
         javaArgs: config.javaArgs,
         server: {
             ip: config.serverIp,

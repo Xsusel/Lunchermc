@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import { filesApi } from '../api/client';
 import {
     FileCode, Upload, Trash2, ToggleLeft, ToggleRight,
-    Loader2, Package, RefreshCw
+    Loader2, Package, RefreshCw, FolderOpen
 } from 'lucide-react';
 
 function formatBytes(bytes) {
@@ -14,7 +14,13 @@ function formatBytes(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-export default function FileManager({ type, title }) {
+/**
+ * FileManager - manages files per server or globally
+ * @param {string} type - file type (config, resourcepacks, shaderpacks, scripts, kubejs)
+ * @param {string} title - display title
+ * @param {number} serverId - if provided, operates on server's folder (disk-based)
+ */
+export default function FileManager({ type, title, serverId }) {
     const [files, setFiles] = useState([]);
     const [loading, setLoading] = useState(true);
     const [uploadLoading, setUploadLoading] = useState(false);
@@ -22,14 +28,19 @@ export default function FileManager({ type, title }) {
 
     useEffect(() => {
         loadFiles();
-    }, [type]);
+    }, [type, serverId]);
 
     const loadFiles = async () => {
         try {
             setLoading(true);
-            const response = await filesApi.getAll(type);
+            let response;
+            if (serverId) {
+                response = await filesApi.getServerFiles(serverId, type);
+            } else {
+                response = await filesApi.getAll(type);
+            }
             if (response.success) {
-                setFiles(response.data);
+                setFiles(response.data || []);
             }
         } catch (error) {
             toast.error('Błąd ładowania plików');
@@ -49,7 +60,11 @@ export default function FileManager({ type, title }) {
             formData.append('name', file.name.replace(/\.[^.]+$/, ''));
             formData.append('is_required', 'true');
 
-            await filesApi.upload(type, formData);
+            if (serverId) {
+                await filesApi.uploadServerFile(serverId, type, formData);
+            } else {
+                await filesApi.upload(type, formData);
+            }
             toast.success('Plik został przesłany');
             loadFiles();
         } catch (error) {
@@ -61,6 +76,11 @@ export default function FileManager({ type, title }) {
     };
 
     const handleToggle = async (file) => {
+        if (serverId) {
+            // Per-server files don't have DB toggle, skip
+            toast.error('Pliki serwera nie mają opcji włącz/wyłącz');
+            return;
+        }
         try {
             await filesApi.toggle(file.id, type);
             toast.success(file.is_enabled ? 'Plik wyłączony' : 'Plik włączony');
@@ -71,10 +91,14 @@ export default function FileManager({ type, title }) {
     };
 
     const handleDelete = async (file) => {
-        if (!confirm(`Czy na pewno chcesz usunąć "${file.name}"?`)) return;
+        if (!confirm(`Czy na pewno chcesz usunąć "${file.filename}"?`)) return;
 
         try {
-            await filesApi.delete(file.id, type);
+            if (serverId) {
+                await filesApi.deleteServerFile(serverId, type, file.filename, file.relative_path);
+            } else {
+                await filesApi.delete(file.id, type);
+            }
             toast.success('Plik został usunięty');
             loadFiles();
         } catch (error) {
@@ -93,7 +117,11 @@ export default function FileManager({ type, title }) {
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-white">{title}</h2>
+                <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                    <FolderOpen className="w-5 h-5 text-mc-green" />
+                    {title}
+                    <span className="text-sm text-gray-500 font-normal">({files.length} plików)</span>
+                </h2>
                 <div className="flex gap-2">
                     <button
                         onClick={loadFiles}
@@ -112,7 +140,7 @@ export default function FileManager({ type, title }) {
                         ) : (
                             <>
                                 <Upload className="w-4 h-4" />
-                                Prześlij plik
+                                Prześlij
                             </>
                         )}
                     </button>
@@ -127,53 +155,52 @@ export default function FileManager({ type, title }) {
 
             <div className="card overflow-hidden p-0">
                 {files.length > 0 ? (
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto max-h-96 overflow-y-auto">
                         <table className="table">
                             <thead>
                                 <tr>
-                                    <th>Nazwa</th>
                                     <th>Plik</th>
+                                    <th>Ścieżka</th>
                                     <th>Rozmiar</th>
-                                    <th>Status</th>
+                                    {!serverId && <th>Status</th>}
                                     <th className="text-right">Akcje</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {files.map((file) => (
-                                    <tr key={file.id}>
+                                {files.map((file, idx) => (
+                                    <tr key={file.id || `${file.relative_path}-${idx}`}>
                                         <td>
                                             <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 bg-mc-gray rounded-lg flex items-center justify-center">
-                                                    <FileCode className="w-5 h-5 text-mc-green" />
+                                                <div className="w-8 h-8 bg-mc-gray rounded flex items-center justify-center shrink-0">
+                                                    <FileCode className="w-4 h-4 text-mc-green" />
                                                 </div>
-                                                <div>
-                                                    <p className="font-medium text-white">{file.name}</p>
-                                                </div>
+                                                <span className="font-medium text-white text-sm">{file.filename}</span>
                                             </div>
                                         </td>
-                                        <td className="text-gray-400 text-sm font-mono">
-                                            {file.filename}
+                                        <td className="text-gray-500 text-xs font-mono">
+                                            {file.relative_path || file.filename}
                                         </td>
                                         <td className="text-gray-400 text-sm">
-                                            {formatBytes(file.file_size)}
+                                            {file.fileSizeFormatted || formatBytes(file.file_size)}
                                         </td>
+                                        {!serverId && (
+                                            <td>
+                                                <button
+                                                    onClick={() => handleToggle(file)}
+                                                    className={`flex items-center gap-1 text-sm ${
+                                                        file.is_enabled ? 'text-green-400' : 'text-gray-500'
+                                                    }`}
+                                                >
+                                                    {file.is_enabled ? (
+                                                        <ToggleRight className="w-5 h-5" />
+                                                    ) : (
+                                                        <ToggleLeft className="w-5 h-5" />
+                                                    )}
+                                                </button>
+                                            </td>
+                                        )}
                                         <td>
-                                            <button
-                                                onClick={() => handleToggle(file)}
-                                                className={`flex items-center gap-1 text-sm ${
-                                                    file.is_enabled ? 'text-green-400' : 'text-gray-500'
-                                                }`}
-                                            >
-                                                {file.is_enabled ? (
-                                                    <ToggleRight className="w-5 h-5" />
-                                                ) : (
-                                                    <ToggleLeft className="w-5 h-5" />
-                                                )}
-                                                {file.is_enabled ? 'Włączony' : 'Wyłączony'}
-                                            </button>
-                                        </td>
-                                        <td>
-                                            <div className="flex items-center justify-end gap-2">
+                                            <div className="flex items-center justify-end">
                                                 <button
                                                     onClick={() => handleDelete(file)}
                                                     className="p-2 hover:bg-red-900/30 rounded-lg text-red-400 transition-colors"
@@ -192,7 +219,7 @@ export default function FileManager({ type, title }) {
                     <div className="text-center py-12">
                         <Package className="w-16 h-16 text-gray-600 mx-auto mb-4" />
                         <p className="text-gray-500">Brak plików</p>
-                        <p className="text-gray-600 text-sm">Dodaj pierwszy plik klikając przycisk powyżej</p>
+                        <p className="text-gray-600 text-sm">Dodaj pliki przyciskiem "Prześlij" lub zaimportuj modpack z CurseForge</p>
                     </div>
                 )}
             </div>

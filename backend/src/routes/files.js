@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { authenticateAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { ensureDir, calculateSHA256, sanitizeFilename } from '../utils/helpers.js';
+import { ensureDir, calculateSHA256, sanitizeFilename, getServerSubPath, getServerPath } from '../utils/helpers.js';
 import db from '../config/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -462,6 +462,128 @@ router.get('/admin/stats', asyncHandler(async (req, res) => {
         success: true,
         data: stats
     });
+}));
+
+// ============================================
+// PER-SERVER FILE MANAGEMENT (disk-based)
+// Reads directly from uploads/servers/{serverId}/{type}/
+// ============================================
+
+// Valid server subfolder types
+const SERVER_FILE_TYPES = {
+    config: { extensions: ['.json', '.toml', '.cfg', '.properties', '.txt', '.yaml', '.yml', '.conf', '.ini'] },
+    resourcepacks: { extensions: ['.zip'] },
+    shaderpacks: { extensions: ['.zip'] },
+    scripts: { extensions: ['.zs', '.js', '.json'] },
+    kubejs: { extensions: ['.js', '.json', '.txt', '.zs'] },
+};
+
+/**
+ * GET /api/files/admin/server/:serverId/list/:type
+ * Lists files from a server's subfolder (disk scan, no DB)
+ */
+router.get('/admin/server/:serverId/list/:type', asyncHandler(async (req, res) => {
+    const { serverId, type } = req.params;
+
+    if (!SERVER_FILE_TYPES[type]) {
+        return res.status(400).json({ success: false, error: `Nieznany typ pliku: ${type}` });
+    }
+
+    const folderPath = getServerSubPath(parseInt(serverId), type);
+    if (!fs.existsSync(folderPath)) {
+        return res.json({ success: true, data: [] });
+    }
+
+    const files = [];
+    scanDir(folderPath, folderPath, files);
+
+    res.json({ success: true, data: files });
+}));
+
+/**
+ * Recursively scans a directory and collects file info
+ */
+function scanDir(basePath, currentPath, results) {
+    const entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    for (const entry of entries) {
+        const fullPath = path.join(currentPath, entry.name);
+        if (entry.isDirectory()) {
+            scanDir(basePath, fullPath, results);
+        } else {
+            const stat = fs.statSync(fullPath);
+            const relativePath = path.relative(basePath, fullPath);
+            results.push({
+                name: entry.name.replace(/\.[^.]+$/, ''),
+                filename: entry.name,
+                relative_path: relativePath,
+                file_size: stat.size,
+                fileSizeFormatted: formatBytes(stat.size),
+                modified: stat.mtime.toISOString(),
+                is_enabled: 1,
+            });
+        }
+    }
+}
+
+/**
+ * POST /api/files/admin/server/:serverId/upload/:type
+ * Upload a file to a server's subfolder
+ */
+router.post('/admin/server/:serverId/upload/:type', asyncHandler(async (req, res) => {
+    const { serverId, type } = req.params;
+
+    if (!SERVER_FILE_TYPES[type]) {
+        return res.status(400).json({ success: false, error: `Nieznany typ pliku: ${type}` });
+    }
+
+    const folderPath = getServerSubPath(parseInt(serverId), type);
+    ensureDir(folderPath);
+
+    const storage = multer.diskStorage({
+        destination: (r, file, cb) => cb(null, folderPath),
+        filename: (r, file, cb) => cb(null, sanitizeFilename(file.originalname)),
+    });
+    const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
+
+    upload.single('file')(req, res, async (err) => {
+        if (err) {
+            return res.status(400).json({ success: false, error: err.message });
+        }
+        if (!req.file) {
+            return res.status(400).json({ success: false, error: 'Nie przesłano pliku' });
+        }
+
+        res.status(201).json({
+            success: true,
+            message: 'Plik przesłany',
+            data: { filename: req.file.filename, size: req.file.size },
+        });
+    });
+}));
+
+/**
+ * DELETE /api/files/admin/server/:serverId/:type/:filename
+ * Delete a file from a server's subfolder (supports nested paths via query param)
+ */
+router.delete('/admin/server/:serverId/:type/:filename', asyncHandler(async (req, res) => {
+    const { serverId, type, filename } = req.params;
+    const relativePath = req.query.path || filename;
+
+    const folderPath = getServerSubPath(parseInt(serverId), type);
+    const filePath = path.join(folderPath, relativePath);
+
+    // Path traversal protection
+    if (!filePath.startsWith(folderPath)) {
+        return res.status(400).json({ success: false, error: 'Nieprawidłowa ścieżka' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ success: false, error: 'Plik nie istnieje' });
+    }
+
+    fs.unlinkSync(filePath);
+
+    res.json({ success: true, message: 'Plik usunięty' });
 }));
 
 function formatBytes(bytes) {

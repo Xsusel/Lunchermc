@@ -291,11 +291,11 @@ function ModsPage() {
 
     const getTabTitle = (tab) => {
         switch(tab) {
+            case 'config': return 'Configs';
             case 'resourcepacks': return 'Resource Packs';
             case 'shaderpacks': return 'Shader Packs';
-            case 'configs': return 'Configs';
-            case 'datapacks': return 'Data Packs';
-            case 'defaultconfigs': return 'Default Configs';
+            case 'scripts': return 'Scripts';
+            case 'kubejs': return 'KubeJS';
             default: return 'Pliki';
         }
     };
@@ -415,30 +415,22 @@ function ModsPage() {
 
             {/* Zakładki */}
             <div className="flex gap-4 border-b border-mc-gray overflow-x-auto">
-                <button
-                    onClick={() => setActiveTab('mods')}
-                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'mods' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
-                >
-                    Mody
-                </button>
-                <button
-                    onClick={() => setActiveTab('resourcepacks')}
-                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'resourcepacks' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
-                >
-                    Resource Packs
-                </button>
-                <button
-                    onClick={() => setActiveTab('shaderpacks')}
-                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'shaderpacks' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
-                >
-                    Shader Packs
-                </button>
-                <button
-                    onClick={() => setActiveTab('configs')}
-                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'configs' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
-                >
-                    Configs
-                </button>
+                {[
+                    { id: 'mods', label: 'Mody' },
+                    { id: 'config', label: 'Configs' },
+                    { id: 'resourcepacks', label: 'Resource Packs' },
+                    { id: 'shaderpacks', label: 'Shader Packs' },
+                    { id: 'scripts', label: 'Scripts' },
+                    { id: 'kubejs', label: 'KubeJS' },
+                ].map(tab => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`pb-2 px-1 whitespace-nowrap ${activeTab === tab.id ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
             </div>
 
             {activeTab === 'mods' ? (
@@ -620,9 +612,10 @@ function ModsPage() {
                 </>
             ) : (
                 <FileManager
-                    key={`${activeTab}-${refreshKey}`}
+                    key={`${activeTab}-${selectedServerId}-${refreshKey}`}
                     type={activeTab}
                     title={getTabTitle(activeTab)}
+                    serverId={selectedServerId}
                 />
             )}
 
