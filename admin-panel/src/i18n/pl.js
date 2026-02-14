@@ -1,0 +1,113 @@
+export default {
+    common: {
+        save: 'Zapisz',
+        cancel: 'Anuluj',
+        delete: 'Usuń',
+        edit: 'Edytuj',
+        add: 'Dodaj',
+        search: 'Szukaj',
+        loading: 'Ładowanie...',
+        confirm: 'Potwierdź',
+        close: 'Zamknij',
+        yes: 'Tak',
+        no: 'Nie',
+        back: 'Powrót',
+        refresh: 'Odśwież',
+        actions: 'Akcje',
+        status: 'Status',
+        enabled: 'Włączony',
+        disabled: 'Wyłączony',
+        required: 'Wymagany',
+        optional: 'Opcjonalny',
+        name: 'Nazwa',
+        description: 'Opis',
+        created: 'Utworzono',
+        updated: 'Zaktualizowano',
+        error: 'Błąd',
+        success: 'Sukces',
+        noData: 'Brak danych'
+    },
+    nav: {
+        dashboard: 'Panel główny',
+        users: 'Użytkownicy',
+        mods: 'Mody',
+        config: 'Konfiguracja',
+        broadcasts: 'Powiadomienia',
+        logs: 'Logi',
+        launcherVersions: 'Wersje launchera',
+        system: 'System',
+        logout: 'Wyloguj'
+    },
+    auth: {
+        login: 'Logowanie',
+        username: 'Nazwa użytkownika',
+        password: 'Hasło',
+        loginButton: 'Zaloguj się',
+        invalidCredentials: 'Nieprawidłowe dane logowania',
+        twoFactorCode: 'Kod 2FA',
+        twoFactorRequired: 'Wymagana weryfikacja dwuetapowa'
+    },
+    dashboard: {
+        title: 'Panel główny',
+        totalUsers: 'Łączna liczba użytkowników',
+        activeMods: 'Aktywne mody',
+        gameVersion: 'Wersja gry',
+        activeBroadcasts: 'Aktywne powiadomienia',
+        recentActivity: 'Ostatnia aktywność',
+        serverStatus: 'Status serwera'
+    },
+    users: {
+        title: 'Zarządzanie użytkownikami',
+        ban: 'Zbanuj',
+        unban: 'Odbanuj',
+        banReason: 'Powód bana',
+        banned: 'Zbanowany',
+        active: 'Aktywny',
+        lastLogin: 'Ostatnie logowanie',
+        playtime: 'Czas gry',
+        deleteConfirm: 'Czy na pewno chcesz usunąć tego użytkownika?'
+    },
+    mods: {
+        title: 'Zarządzanie modami',
+        uploadMod: 'Wgraj mod',
+        addByUrl: 'Dodaj z URL',
+        fileName: 'Nazwa pliku',
+        fileSize: 'Rozmiar pliku',
+        sha256: 'Suma SHA256',
+        modType: 'Typ modu',
+        toggleEnabled: 'Włącz/Wyłącz'
+    },
+    config: {
+        title: 'Konfiguracja gry',
+        gameVersion: 'Wersja Minecraft',
+        loaderType: 'Typ loadera',
+        serverIp: 'IP serwera',
+        serverPort: 'Port serwera',
+        javaArgs: 'Argumenty Java',
+        maintenance: 'Tryb konserwacji',
+        maintenanceMessage: 'Wiadomość konserwacji',
+        servers: 'Serwery',
+        addServer: 'Dodaj serwer',
+        defaultServer: 'Serwer domyślny'
+    },
+    broadcasts: {
+        title: 'Powiadomienia',
+        newBroadcast: 'Nowe powiadomienie',
+        message: 'Wiadomość',
+        type: 'Typ',
+        priority: 'Priorytet',
+        expiresAt: 'Wygasa',
+        activate: 'Aktywuj',
+        deactivate: 'Dezaktywuj'
+    },
+    system: {
+        title: 'System',
+        health: 'Stan systemu',
+        backups: 'Kopie zapasowe',
+        createBackup: 'Utwórz kopię',
+        restoreBackup: 'Przywróć kopię',
+        twoFactor: 'Uwierzytelnianie dwuetapowe',
+        enable2FA: 'Włącz 2FA',
+        disable2FA: 'Wyłącz 2FA'
+    }
+};

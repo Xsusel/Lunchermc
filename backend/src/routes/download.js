@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { Mod } from '../models/index.js';
+import { Mod, Skin } from '../models/index.js';
 import { downloadLimiter } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getModsPath } from '../utils/helpers.js';
@@ -131,6 +131,78 @@ router.get('/launcher/:filename', asyncHandler(async (req, res) => {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    const stream = fs.createReadStream(filePath);
+    stream.pipe(res);
+}));
+
+/**
+ * GET /api/download/skins/:filename
+ * Pobiera plik skina gracza
+ */
+router.get('/skins/:filename', asyncHandler(async (req, res) => {
+    const { filename } = req.params;
+
+    // Zabezpieczenie przed path traversal
+    if (filename.includes('..') || filename.includes('/')) {
+        return res.status(400).json({
+            success: false,
+            error: 'Nieprawidlowa nazwa pliku'
+        });
+    }
+
+    // Sprawdzamy czy plik istnieje na dysku
+    const filePath = path.join(Skin.getSkinsPath(), filename);
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+            success: false,
+            error: 'Plik skina nie zostal znaleziony'
+        });
+    }
+
+    const stat = fs.statSync(filePath);
+
+    // Ustawiamy naglowki
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Cache-Control', 'public, max-age=300'); // Cache 5 minut
+
+    const stream = fs.createReadStream(filePath);
+    stream.pipe(res);
+}));
+
+/**
+ * GET /api/download/capes/:filename
+ * Pobiera plik peleryny gracza
+ */
+router.get('/capes/:filename', asyncHandler(async (req, res) => {
+    const { filename } = req.params;
+
+    // Zabezpieczenie przed path traversal
+    if (filename.includes('..') || filename.includes('/')) {
+        return res.status(400).json({
+            success: false,
+            error: 'Nieprawidlowa nazwa pliku'
+        });
+    }
+
+    // Sprawdzamy czy plik istnieje na dysku
+    const filePath = path.join(Skin.getCapesPath(), filename);
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+            success: false,
+            error: 'Plik peleryny nie zostal znaleziony'
+        });
+    }
+
+    const stat = fs.statSync(filePath);
+
+    // Ustawiamy naglowki
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Cache-Control', 'public, max-age=300'); // Cache 5 minut
 
     const stream = fs.createReadStream(filePath);
     stream.pipe(res);

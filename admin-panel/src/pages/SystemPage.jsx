@@ -1,15 +1,16 @@
 /**
  * Strona zarzadzania systemem
- * Aktualizacje, backup, restart
+ * Aktualizacje, backup, restart, 2FA
  */
 import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { systemApi } from '../api/client';
+import { systemApi, twoFactorApi } from '../api/client';
 import {
     Server, RefreshCw, Download, GitBranch,
     HardDrive, Clock, AlertTriangle, CheckCircle,
     XCircle, Loader2, Archive, RotateCcw, Play,
-    Terminal, Github
+    Terminal, Github, Shield, ShieldCheck, ShieldOff,
+    Key, Copy, Eye, EyeOff
 } from 'lucide-react';
 
 function formatBytes(bytes) {
@@ -44,9 +45,20 @@ function SystemPage() {
     const [backups, setBackups] = useState([]);
     const logsEndRef = useRef(null);
 
+    // Stan 2FA
+    const [twoFAEnabled, setTwoFAEnabled] = useState(false);
+    const [twoFALoading, setTwoFALoading] = useState(false);
+    const [twoFASetupData, setTwoFASetupData] = useState(null);
+    const [twoFAVerifyCode, setTwoFAVerifyCode] = useState('');
+    const [twoFADisableCode, setTwoFADisableCode] = useState('');
+    const [backupCodes, setBackupCodes] = useState(null);
+    const [showSecret, setShowSecret] = useState(false);
+    const [showDisableForm, setShowDisableForm] = useState(false);
+
     useEffect(() => {
         loadStatus();
         loadBackups();
+        load2FAStatus();
     }, []);
 
     // Auto-scroll logs
@@ -179,6 +191,102 @@ function SystemPage() {
         } finally {
             setCreatingBackup(false);
         }
+    };
+
+    // ---- 2FA Handlers ----
+
+    const load2FAStatus = async () => {
+        try {
+            const response = await twoFactorApi.getStatus();
+            if (response.success) {
+                setTwoFAEnabled(response.data.enabled);
+            }
+        } catch (error) {
+            console.error('Error loading 2FA status:', error);
+        }
+    };
+
+    const handleSetup2FA = async () => {
+        setTwoFALoading(true);
+        try {
+            const response = await twoFactorApi.setup();
+            if (response.success) {
+                setTwoFASetupData(response.data);
+                setTwoFAVerifyCode('');
+                setBackupCodes(null);
+            }
+        } catch (error) {
+            const msg = error.response?.data?.error || 'Blad konfiguracji 2FA';
+            toast.error(msg);
+        } finally {
+            setTwoFALoading(false);
+        }
+    };
+
+    const handleVerifySetup = async () => {
+        if (!twoFAVerifyCode.trim()) return;
+        setTwoFALoading(true);
+        try {
+            const response = await twoFactorApi.verifySetup(twoFAVerifyCode);
+            if (response.success) {
+                setTwoFAEnabled(true);
+                setTwoFASetupData(null);
+                setTwoFAVerifyCode('');
+                setBackupCodes(response.data.backupCodes);
+                toast.success('2FA zostalo wlaczone pomyslnie!');
+            }
+        } catch (error) {
+            const msg = error.response?.data?.error || 'Nieprawidlowy kod weryfikacyjny';
+            toast.error(msg);
+        } finally {
+            setTwoFALoading(false);
+        }
+    };
+
+    const handleDisable2FA = async () => {
+        if (!twoFADisableCode.trim()) return;
+        setTwoFALoading(true);
+        try {
+            const response = await twoFactorApi.disable(twoFADisableCode);
+            if (response.success) {
+                setTwoFAEnabled(false);
+                setTwoFADisableCode('');
+                setShowDisableForm(false);
+                setBackupCodes(null);
+                toast.success('2FA zostalo wylaczone');
+            }
+        } catch (error) {
+            const msg = error.response?.data?.error || 'Nieprawidlowy kod 2FA';
+            toast.error(msg);
+        } finally {
+            setTwoFALoading(false);
+        }
+    };
+
+    const handleRegenerateBackupCodes = async () => {
+        if (!confirm('Czy na pewno chcesz wygenerowac nowe kody zapasowe? Stare kody przestan dzialac.')) {
+            return;
+        }
+        setTwoFALoading(true);
+        try {
+            const response = await twoFactorApi.generateBackupCodes();
+            if (response.success) {
+                setBackupCodes(response.data.backupCodes);
+                toast.success('Nowe kody zapasowe zostaly wygenerowane');
+            }
+        } catch (error) {
+            toast.error('Blad generowania kodow zapasowych');
+        } finally {
+            setTwoFALoading(false);
+        }
+    };
+
+    const copyToClipboard = (text) => {
+        navigator.clipboard.writeText(text).then(() => {
+            toast.success('Skopiowano do schowka');
+        }).catch(() => {
+            toast.error('Nie udalo sie skopiowac');
+        });
     };
 
     if (loading) {
@@ -450,6 +558,234 @@ function SystemPage() {
                             <p className="text-gray-500 text-center py-4">
                                 Brak backupow. Utworz pierwszy backup powyzej.
                             </p>
+                        )}
+                    </div>
+                </div>
+
+                {/* Uwierzytelnianie dwuetapowe (2FA) */}
+                <div className="card lg:col-span-2">
+                    <div className="card-header">
+                        <Shield className="w-5 h-5 text-mc-green" />
+                        Uwierzytelnianie dwuetapowe (2FA)
+                    </div>
+
+                    <div className="space-y-4">
+                        {/* Status 2FA */}
+                        <div className={`p-3 rounded-lg flex items-center gap-3 ${
+                            twoFAEnabled
+                                ? 'bg-green-900/20 border border-green-800'
+                                : 'bg-yellow-900/20 border border-yellow-800'
+                        }`}>
+                            {twoFAEnabled ? (
+                                <ShieldCheck className="w-5 h-5 text-green-500" />
+                            ) : (
+                                <ShieldOff className="w-5 h-5 text-yellow-500" />
+                            )}
+                            <div>
+                                <p className={twoFAEnabled ? 'text-green-300' : 'text-yellow-300'}>
+                                    {twoFAEnabled
+                                        ? '2FA jest wlaczone - Twoje konto jest chronione dodatkowym uwierzytelnianiem'
+                                        : '2FA jest wylaczone - Zalecamy wlaczenie dla lepszego bezpieczenstwa'
+                                    }
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Przyciski akcji */}
+                        {!twoFAEnabled && !twoFASetupData && (
+                            <button
+                                onClick={handleSetup2FA}
+                                disabled={twoFALoading}
+                                className="btn btn-primary"
+                            >
+                                {twoFALoading ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Shield className="w-4 h-4" />
+                                )}
+                                Wlacz 2FA
+                            </button>
+                        )}
+
+                        {/* Setup flow - wyswietlanie sekretu i otpauth URI */}
+                        {twoFASetupData && !twoFAEnabled && (
+                            <div className="space-y-4">
+                                <div className="p-4 bg-mc-darker rounded-lg space-y-3">
+                                    <p className="text-sm text-gray-400">
+                                        Skonfiguruj aplikacje uwierzytelniajaca (np. Google Authenticator, Authy)
+                                        uzywajac ponizszego sekretu lub URI:
+                                    </p>
+
+                                    {/* Secret */}
+                                    <div>
+                                        <p className="text-xs text-gray-500 mb-1">Sekret (Base32):</p>
+                                        <div className="flex items-center gap-2">
+                                            <code className="flex-1 p-2 bg-black rounded font-mono text-sm text-mc-accent break-all">
+                                                {showSecret ? twoFASetupData.secret : '************************************'}
+                                            </code>
+                                            <button
+                                                onClick={() => setShowSecret(!showSecret)}
+                                                className="btn btn-secondary p-2"
+                                                title={showSecret ? 'Ukryj' : 'Pokaz'}
+                                            >
+                                                {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                            </button>
+                                            <button
+                                                onClick={() => copyToClipboard(twoFASetupData.secret)}
+                                                className="btn btn-secondary p-2"
+                                                title="Kopiuj sekret"
+                                            >
+                                                <Copy className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* OTPAuth URI */}
+                                    <div>
+                                        <p className="text-xs text-gray-500 mb-1">OTPAuth URI (do skanowania):</p>
+                                        <div className="flex items-center gap-2">
+                                            <code className="flex-1 p-2 bg-black rounded font-mono text-xs text-gray-300 break-all max-h-20 overflow-y-auto">
+                                                {twoFASetupData.otpauthUri}
+                                            </code>
+                                            <button
+                                                onClick={() => copyToClipboard(twoFASetupData.otpauthUri)}
+                                                className="btn btn-secondary p-2"
+                                                title="Kopiuj URI"
+                                            >
+                                                <Copy className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Weryfikacja kodu */}
+                                <div className="p-4 bg-mc-darker rounded-lg space-y-3">
+                                    <p className="text-sm text-gray-400">
+                                        Wprowadz 6-cyfrowy kod z aplikacji aby potwierdzic konfiguracje:
+                                    </p>
+                                    <div className="flex items-center gap-3">
+                                        <input
+                                            type="text"
+                                            value={twoFAVerifyCode}
+                                            onChange={(e) => setTwoFAVerifyCode(e.target.value)}
+                                            className="input text-center text-xl tracking-widest font-mono w-48"
+                                            placeholder="000000"
+                                            maxLength={6}
+                                            autoComplete="one-time-code"
+                                        />
+                                        <button
+                                            onClick={handleVerifySetup}
+                                            disabled={twoFALoading || twoFAVerifyCode.length < 6}
+                                            className="btn btn-primary"
+                                        >
+                                            {twoFALoading ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <CheckCircle className="w-4 h-4" />
+                                            )}
+                                            Potwierdz
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setTwoFASetupData(null);
+                                                setTwoFAVerifyCode('');
+                                                setShowSecret(false);
+                                            }}
+                                            className="btn btn-secondary"
+                                        >
+                                            Anuluj
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Kody zapasowe - wyswietlane po wlaczeniu 2FA lub po regeneracji */}
+                        {backupCodes && (
+                            <div className="p-4 bg-mc-darker rounded-lg space-y-3">
+                                <div className="flex items-center gap-2">
+                                    <Key className="w-5 h-5 text-yellow-500" />
+                                    <p className="text-white font-medium">Kody zapasowe</p>
+                                </div>
+                                <p className="text-sm text-gray-400">
+                                    Zapisz te kody w bezpiecznym miejscu. Kazdy kod moze byc uzyty tylko raz.
+                                    Uzywaj ich gdy nie masz dostepu do aplikacji uwierzytelniajace.
+                                </p>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                    {backupCodes.map((code, i) => (
+                                        <div key={i} className="p-2 bg-black rounded text-center">
+                                            <code className="font-mono text-sm text-mc-accent">{code}</code>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => copyToClipboard(backupCodes.join('\n'))}
+                                    className="btn btn-secondary"
+                                >
+                                    <Copy className="w-4 h-4" />
+                                    Kopiuj wszystkie kody
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Akcje gdy 2FA jest wlaczone */}
+                        {twoFAEnabled && (
+                            <div className="flex flex-wrap gap-3">
+                                <button
+                                    onClick={handleRegenerateBackupCodes}
+                                    disabled={twoFALoading}
+                                    className="btn btn-secondary"
+                                >
+                                    {twoFALoading ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                        <Key className="w-4 h-4" />
+                                    )}
+                                    Nowe kody zapasowe
+                                </button>
+
+                                {!showDisableForm ? (
+                                    <button
+                                        onClick={() => setShowDisableForm(true)}
+                                        className="btn btn-secondary text-red-400 hover:text-red-300"
+                                    >
+                                        <ShieldOff className="w-4 h-4" />
+                                        Wylacz 2FA
+                                    </button>
+                                ) : (
+                                    <div className="flex items-center gap-2 w-full mt-2 p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                                        <p className="text-sm text-red-300 mr-2">Wprowadz kod 2FA aby wylaczyc:</p>
+                                        <input
+                                            type="text"
+                                            value={twoFADisableCode}
+                                            onChange={(e) => setTwoFADisableCode(e.target.value)}
+                                            className="input text-center font-mono w-36"
+                                            placeholder="000000"
+                                            maxLength={6}
+                                        />
+                                        <button
+                                            onClick={handleDisable2FA}
+                                            disabled={twoFALoading || twoFADisableCode.length < 6}
+                                            className="btn bg-red-600 hover:bg-red-700 text-white"
+                                        >
+                                            {twoFALoading ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                'Potwierdz'
+                                            )}
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShowDisableForm(false);
+                                                setTwoFADisableCode('');
+                                            }}
+                                            className="btn btn-secondary"
+                                        >
+                                            Anuluj
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
                         )}
                     </div>
                 </div>

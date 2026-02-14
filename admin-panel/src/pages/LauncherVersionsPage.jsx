@@ -8,14 +8,16 @@ import { launcherVersionsApi } from '../api/client';
 import {
     Download, Plus, Trash2, X, Loader2,
     RefreshCw, Shield, Tag, Link as LinkIcon,
-    Hash, Clock, AlertTriangle
+    Hash, Clock, AlertTriangle, Upload
 } from 'lucide-react';
 
 function LauncherVersionsPage() {
     const [versions, setVersions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
+    const [showUploadModal, setShowUploadModal] = useState(false);
     const [actionLoading, setActionLoading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
 
     const [form, setForm] = useState({
         version: '',
@@ -23,6 +25,13 @@ function LauncherVersionsPage() {
         sha256: '',
         changelog: '',
         is_required: false
+    });
+
+    const [uploadForm, setUploadForm] = useState({
+        version: '',
+        changelog: '',
+        is_required: false,
+        file: null
     });
 
     useEffect(() => {
@@ -91,6 +100,47 @@ function LauncherVersionsPage() {
         }
     };
 
+    const handleUpload = async (e) => {
+        e.preventDefault();
+
+        if (!uploadForm.file) {
+            toast.error('Wybierz plik launchera');
+            return;
+        }
+
+        if (!/^\d+\.\d+\.\d+$/.test(uploadForm.version)) {
+            toast.error('Nieprawidlowy format wersji (np. 1.2.3)');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', uploadForm.file);
+        formData.append('version', uploadForm.version);
+        formData.append('changelog', uploadForm.changelog || '');
+        formData.append('is_required', uploadForm.is_required);
+
+        setActionLoading(true);
+        setUploadProgress(0);
+
+        try {
+            const response = await launcherVersionsApi.upload(formData, (percent) => {
+                setUploadProgress(percent);
+            });
+
+            if (response.success) {
+                toast.success(`Wersja ${uploadForm.version} przeslana i opublikowana!`);
+                setShowUploadModal(false);
+                setUploadForm({ version: '', changelog: '', is_required: false, file: null });
+                setUploadProgress(0);
+                loadVersions();
+            }
+        } catch (error) {
+            toast.error(error.response?.data?.error || 'Blad przesylania pliku');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     const handleDelete = async (id, version) => {
         if (!confirm(`Czy na pewno chcesz usunac wersje ${version}?`)) {
             return;
@@ -139,11 +189,18 @@ function LauncherVersionsPage() {
                         Odswiez
                     </button>
                     <button
-                        onClick={() => setShowAddModal(true)}
+                        onClick={() => setShowUploadModal(true)}
                         className="btn btn-primary"
                     >
+                        <Upload className="w-4 h-4" />
+                        Przeslij plik
+                    </button>
+                    <button
+                        onClick={() => setShowAddModal(true)}
+                        className="btn btn-secondary"
+                    >
                         <Plus className="w-4 h-4" />
-                        Dodaj wersje
+                        Dodaj z URL
                     </button>
                 </div>
             </div>
@@ -155,10 +212,9 @@ function LauncherVersionsPage() {
                     <div className="text-sm text-blue-300">
                         <p className="font-medium mb-1">Jak to dziala:</p>
                         <ol className="list-decimal list-inside space-y-1 text-blue-400">
-                            <li>Zbuduj nowa wersje launchera (npm run build:win)</li>
-                            <li>Przeslij plik .exe na serwer (np. do /uploads/launcher/)</li>
-                            <li>Oblicz SHA256 pliku: <code className="bg-blue-900/50 px-1 rounded">sha256sum plik.exe</code></li>
-                            <li>Dodaj nowa wersje ponizej z URL do pliku i SHA256</li>
+                            <li>Zbuduj nowa wersje launchera (<code className="bg-blue-900/50 px-1 rounded">npm run build:win</code>)</li>
+                            <li>Kliknij <strong>"Przeslij plik"</strong> i wybierz plik .exe</li>
+                            <li>SHA256 zostanie obliczone automatycznie!</li>
                             <li>Launcher automatycznie powiadomi graczy o aktualizacji</li>
                         </ol>
                     </div>
@@ -387,6 +443,108 @@ function LauncherVersionsPage() {
                                         <Plus className="w-4 h-4" />
                                     )}
                                     {actionLoading ? 'Dodawanie...' : 'Dodaj wersje'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal uploadu pliku */}
+            {showUploadModal && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+                    <div className="bg-mc-dark border border-mc-gray rounded-xl w-full max-w-lg mx-4 p-6">
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                                <Upload className="w-5 h-5 text-mc-green" />
+                                Przeslij plik launchera
+                            </h2>
+                            <button
+                                onClick={() => { setShowUploadModal(false); setUploadProgress(0); }}
+                                className="p-2 hover:bg-mc-gray rounded-lg"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleUpload} className="space-y-4">
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Wersja (format: x.y.z)</label>
+                                <input
+                                    type="text"
+                                    value={uploadForm.version}
+                                    onChange={(e) => setUploadForm({ ...uploadForm, version: e.target.value })}
+                                    placeholder="1.0.1"
+                                    className="input w-full"
+                                    pattern="\d+\.\d+\.\d+"
+                                    required
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Plik launchera (.exe, .AppImage, .dmg)</label>
+                                <input
+                                    type="file"
+                                    accept=".exe,.AppImage,.dmg,.deb,.zip"
+                                    onChange={(e) => setUploadForm({ ...uploadForm, file: e.target.files[0] })}
+                                    className="block w-full text-sm text-gray-400
+                                        file:mr-4 file:py-2 file:px-4
+                                        file:rounded-lg file:border-0
+                                        file:text-sm file:font-semibold
+                                        file:bg-mc-accent file:text-white
+                                        hover:file:bg-mc-green file:cursor-pointer"
+                                    required
+                                />
+                                {uploadForm.file && (
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        {uploadForm.file.name} ({(uploadForm.file.size / 1024 / 1024).toFixed(1)} MB)
+                                    </p>
+                                )}
+                                <p className="text-xs text-green-400 mt-1">SHA256 zostanie obliczone automatycznie na serwerze</p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Changelog (opcjonalny)</label>
+                                <textarea
+                                    value={uploadForm.changelog}
+                                    onChange={(e) => setUploadForm({ ...uploadForm, changelog: e.target.value })}
+                                    placeholder="Opis zmian w tej wersji..."
+                                    className="input w-full h-24 resize-none"
+                                />
+                            </div>
+
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={uploadForm.is_required}
+                                    onChange={(e) => setUploadForm({ ...uploadForm, is_required: e.target.checked })}
+                                    className="w-4 h-4 rounded border-mc-gray bg-mc-darker"
+                                />
+                                <span className="text-sm text-gray-300">Wymagana aktualizacja</span>
+                            </label>
+
+                            {actionLoading && uploadProgress > 0 && (
+                                <div>
+                                    <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                        <span>Przesylanie...</span>
+                                        <span>{uploadProgress}%</span>
+                                    </div>
+                                    <div className="w-full bg-mc-gray rounded-full h-2">
+                                        <div
+                                            className="bg-mc-green h-2 rounded-full transition-all"
+                                            style={{ width: `${uploadProgress}%` }}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="flex gap-3 pt-4 border-t border-mc-gray">
+                                <button type="button" onClick={() => setShowUploadModal(false)} className="btn btn-secondary flex-1">
+                                    Anuluj
+                                </button>
+                                <button type="submit" disabled={actionLoading} className="btn btn-primary flex-1">
+                                    {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                                    {actionLoading ? 'Przesylanie...' : 'Przeslij i opublikuj'}
                                 </button>
                             </div>
                         </form>

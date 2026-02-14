@@ -3,6 +3,9 @@
  * Minecraft Launcher Backend
  */
 import 'dotenv/config';
+import { validateEnvironment } from './config/validateEnv.js';
+validateEnvironment();
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -11,7 +14,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import http from 'http';
 
-import { authRoutes, adminRoutes, launcherRoutes, downloadRoutes, systemRoutes } from './routes/index.js';
+import { authRoutes, adminRoutes, launcherRoutes, downloadRoutes, systemRoutes, skinsRoutes } from './routes/index.js';
 import versionsRoutes from './routes/versions.js';
 import filesRoutes from './routes/files.js';
 import { apiLimiter, errorHandler, notFoundHandler } from './middleware/index.js';
@@ -76,6 +79,8 @@ ensureDir(path.join(getUploadsPath(), 'defaultconfigs'));
 ensureDir(path.join(getUploadsPath(), 'resourcepacks'));
 ensureDir(path.join(getUploadsPath(), 'shaderpacks'));
 ensureDir(path.join(getUploadsPath(), 'configs'));
+ensureDir(path.join(getUploadsPath(), 'skins'));
+ensureDir(path.join(getUploadsPath(), 'capes'));
 ensureDir(path.join(__dirname, '../data'));
 
 // Inicjalizacja tabeli serwerów (auto-tworzenie + migracja)
@@ -96,7 +101,8 @@ app.get('/api', (req, res) => {
             auth: '/api/auth',
             launcher: '/api/launcher',
             admin: '/api/admin',
-            download: '/api/download'
+            download: '/api/download',
+            skins: '/api/skins'
         }
     });
 });
@@ -218,6 +224,7 @@ app.use('/api/admin/system', systemRoutes); // Zarządzanie systemem
 app.use('/api/download', downloadRoutes); // Download ma własny rate limiter
 app.use('/api/versions', apiLimiter, versionsRoutes); // Wersje MC/Forge/Fabric
 app.use('/api/files', filesRoutes); // Zarządzanie plikami (configs, resourcepacks, etc.)
+app.use('/api/skins', apiLimiter, skinsRoutes); // System skinów graczy (non-premium)
 
 // ============================================
 // WEBSOCKET DLA POWIADOMIEŃ REAL-TIME

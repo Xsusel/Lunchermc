@@ -34,12 +34,15 @@ api.interceptors.response.use(
     (error) => {
         const message = error.response?.data?.error || 'Wystąpił błąd połączenia';
 
-        // Obsługa błędu autoryzacji
+        // Obsługa błędu autoryzacji (pomijamy przekierowanie na stronie logowania/2FA)
         if (error.response?.status === 401) {
-            localStorage.removeItem('adminToken');
-            localStorage.removeItem('admin');
-            window.location.href = '/login';
-            toast.error('Sesja wygasła. Zaloguj się ponownie.');
+            const isLoginPage = window.location.pathname === '/login';
+            if (!isLoginPage) {
+                localStorage.removeItem('adminToken');
+                localStorage.removeItem('admin');
+                window.location.href = '/login';
+                toast.error('Sesja wygasła. Zaloguj się ponownie.');
+            }
         } else if (error.response?.status === 403) {
             toast.error('Brak uprawnień do tej akcji');
         } else if (error.response?.status >= 500) {
@@ -78,6 +81,12 @@ export const dashboardApi = {
     // Pobieranie statusu serwera MC
     getServerStatus: async () => {
         const response = await api.get('/launcher/server-status');
+        return response.data;
+    },
+
+    // Pobieranie real-time statusu wszystkich serwerów
+    getAllServersStatus: async () => {
+        const response = await api.get('/admin/servers/status');
         return response.data;
     }
 };
@@ -301,15 +310,66 @@ export const launcherVersionsApi = {
         return response.data;
     },
 
-    // Dodawanie wersji
+    // Dodawanie wersji (ręcznie z URL)
     create: async (data) => {
         const response = await api.post('/admin/launcher-versions', data);
+        return response.data;
+    },
+
+    // Upload pliku launchera (automatyczny SHA256 i URL)
+    upload: async (formData, onProgress) => {
+        const response = await api.post('/admin/launcher-versions/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            timeout: 300000, // 5 min timeout
+            onUploadProgress: onProgress ? (e) => {
+                const percent = Math.round((e.loaded * 100) / e.total);
+                onProgress(percent);
+            } : undefined
+        });
         return response.data;
     },
 
     // Usuwanie wersji
     delete: async (id) => {
         const response = await api.delete(`/admin/launcher-versions/${id}`);
+        return response.data;
+    }
+};
+
+export const twoFactorApi = {
+    // Rozpoczyna konfigurację 2FA
+    setup: async () => {
+        const response = await api.post('/admin/2fa/setup');
+        return response.data;
+    },
+
+    // Weryfikuje kod TOTP podczas konfiguracji
+    verifySetup: async (token) => {
+        const response = await api.post('/admin/2fa/verify-setup', { token });
+        return response.data;
+    },
+
+    // Wyłącza 2FA
+    disable: async (token) => {
+        const response = await api.post('/admin/2fa/disable', { token });
+        return response.data;
+    },
+
+    // Generuje nowe kody zapasowe
+    generateBackupCodes: async () => {
+        const response = await api.post('/admin/2fa/backup-codes');
+        return response.data;
+    },
+
+    // Weryfikuje 2FA podczas logowania
+    verifyLogin: async (tempToken, token) => {
+        const response = await api.post('/admin/2fa/verify-login', { tempToken, token });
+        return response.data;
+    },
+
+    // Sprawdza status 2FA
+    getStatus: async () => {
+        const response = await api.get('/admin/2fa/status');
         return response.data;
     }
 };
