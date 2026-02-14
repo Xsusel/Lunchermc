@@ -201,10 +201,11 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
     let fileName = fileInfo ? fileInfo.fileName : `${cfMod.slug}-${fileId}.jar`;
 
     if (!downloadUrl) {
-        // Fallback: szukaj na Modrinth
-        const loaderType = fileInfo?.gameVersionTypeId ? undefined :
-            (cfMod.categories?.some(c => c.name?.toLowerCase().includes('neoforge')) ? 'neoforge' :
-            cfMod.categories?.some(c => c.name?.toLowerCase().includes('fabric')) ? 'fabric' : 'forge');
+        // Fallback: szukaj na Modrinth - wykryj loader z kategorii CurseForge
+        const loaderType =
+            cfMod.categories?.some(c => c.name?.toLowerCase().includes('neoforge')) ? 'neoforge' :
+            cfMod.categories?.some(c => c.name?.toLowerCase().includes('fabric')) ? 'fabric' :
+            cfMod.categories?.some(c => c.name?.toLowerCase().includes('forge')) ? 'forge' : undefined;
 
         const mrResult = await mrFindModDownload(cfMod.name, cfMod.slug, {
             gameVersion: gameVersion || fileInfo?.gameVersions?.[0],
@@ -507,6 +508,19 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 const safeFilename = sanitizeFilename(depFile.fileName);
                 let existingMod = Mod.findByFilename(safeFilename);
                 if (existingMod) {
+                    // Upewnij się, że plik fizycznie jest w folderze tego serwera
+                    const targetModPath = path.join(serverModsPath, safeFilename);
+                    if (!fs.existsSync(targetModPath)) {
+                        // Skopiuj z folderu innego serwera lub globalnego
+                        const sourceUrl = existingMod.url || '';
+                        const serverMatch = sourceUrl.match(/\/servers\/(\d+)\/mods\//);
+                        if (serverMatch) {
+                            const sourcePath = path.join(getServerSubPath(parseInt(serverMatch[1]), 'mods'), safeFilename);
+                            if (fs.existsSync(sourcePath)) {
+                                fs.copyFileSync(sourcePath, targetModPath);
+                            }
+                        }
+                    }
                     Server.assignMod(targetServer.id, existingMod.id);
                     results.skipped.push({
                         modId: projectId,
@@ -574,7 +588,18 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 continue;
             }
 
-            const downloadResponse = await fetch(downloadUrl);
+            // Pobierz z retry (max 3 próby na transient errors)
+            let downloadResponse;
+            for (let dlRetry = 0; dlRetry < 3; dlRetry++) {
+                downloadResponse = await fetch(downloadUrl);
+                if (downloadResponse.ok) break;
+                // Retry tylko na transient errors (429, 500, 502, 503, 504)
+                if ([429, 500, 502, 503, 504].includes(downloadResponse.status) && dlRetry < 2) {
+                    await new Promise(r => setTimeout(r, 2000 * (dlRetry + 1)));
+                    continue;
+                }
+                break;
+            }
             if (!downloadResponse.ok) {
                 results.failed.push({
                     modId: projectId,

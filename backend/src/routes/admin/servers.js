@@ -704,4 +704,123 @@ router.post('/servers/:id/sync',
     })
 );
 
+/**
+ * POST /api/admin/servers/:id/sync-all
+ * Synchronizuje WSZYSTKIE foldery serwera (mods + config + resourcepacks + shaderpacks + scripts + kubejs)
+ * Mody: dodaje do bazy i przypisuje do serwera
+ * Inne pliki: tylko skanuje - launcher je pobiera na podstawie filesystem scan
+ */
+router.post('/servers/:id/sync-all',
+    [param('id').isInt()],
+    asyncHandler(async (req, res) => {
+        const id = parseInt(req.params.id);
+        const server = Server.getById(id);
+        if (!server) {
+            return res.status(404).json({ success: false, error: 'Serwer nie znaleziony' });
+        }
+
+        // Upewnij się, że wszystkie foldery istnieją
+        createServerFolders(id);
+
+        const results = {
+            mods: { added: 0, skipped: 0, assigned: 0, errors: [] },
+            files: {},
+            totalFiles: 0,
+        };
+
+        // 1. Synchronizuj mody (jak w /sync)
+        const serverModsPath = getServerModsPath(id);
+        const globalModsPath = path.join(getUploadsPath(), 'mods');
+        ensureDir(globalModsPath);
+
+        try {
+            const modFiles = fs.readdirSync(serverModsPath).filter(f => isAllowedModFile(f));
+            for (const filename of modFiles) {
+                try {
+                    const serverFilePath = path.join(serverModsPath, filename);
+                    let mod = Mod.findByFilename(filename);
+
+                    if (!mod) {
+                        const sha256 = await calculateSHA256(serverFilePath);
+                        const stats = fs.statSync(serverFilePath);
+
+                        const globalFilePath = path.join(globalModsPath, filename);
+                        if (!fs.existsSync(globalFilePath)) {
+                            fs.copyFileSync(serverFilePath, globalFilePath);
+                        }
+
+                        mod = Mod.create({
+                            name: filename.replace(/\.[^.]+$/, ''),
+                            filename,
+                            url: `/api/download/servers/${id}/mods/${filename}`,
+                            sha256,
+                            file_size: stats.size,
+                            is_required: true,
+                            mod_type: 'mod',
+                            description: `Zsynchronizowano z FTP serwera "${server.name}"`,
+                        });
+                        results.mods.added++;
+                    } else {
+                        results.mods.skipped++;
+                    }
+
+                    Server.assignMod(id, mod.id);
+                    results.mods.assigned++;
+                } catch (err) {
+                    results.mods.errors.push({ filename, error: err.message });
+                }
+            }
+        } catch (e) {
+            // Folder pusty lub nie istnieje
+        }
+
+        // 2. Skanuj inne foldery (config, resourcepacks, shaderpacks, scripts, kubejs)
+        const otherFolders = ['config', 'resourcepacks', 'shaderpacks', 'scripts', 'kubejs'];
+        for (const folder of otherFolders) {
+            const folderPath = getServerSubPath(id, folder);
+            if (!fs.existsSync(folderPath)) continue;
+
+            const folderFiles = [];
+            const scanDir = (dir) => {
+                try {
+                    const entries = fs.readdirSync(dir, { withFileTypes: true });
+                    for (const entry of entries) {
+                        const fullPath = path.join(dir, entry.name);
+                        if (entry.isDirectory()) {
+                            scanDir(fullPath);
+                        } else {
+                            const relativePath = path.relative(folderPath, fullPath);
+                            const stat = fs.statSync(fullPath);
+                            folderFiles.push({
+                                path: `${folder}/${relativePath}`,
+                                filename: entry.name,
+                                size: stat.size,
+                            });
+                        }
+                    }
+                } catch (e) {}
+            };
+            scanDir(folderPath);
+
+            results.files[folder] = folderFiles.length;
+            results.totalFiles += folderFiles.length;
+        }
+
+        ActivityLog.logAdminAction('server_ftp_sync_all', {
+            serverId: id,
+            serverName: server.name,
+            modsAdded: results.mods.added,
+            modsSkipped: results.mods.skipped,
+            totalFiles: results.totalFiles,
+            folders: results.files,
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: `Synchronizacja serwera "${server.name}": mody (${results.mods.added} nowych, ${results.mods.skipped} istniejacych), pliki: ${results.totalFiles} w ${Object.keys(results.files).length} folderach`,
+            data: results,
+        });
+    })
+);
+
 export default router;

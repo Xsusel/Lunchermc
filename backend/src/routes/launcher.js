@@ -372,6 +372,7 @@ router.get('/manifest', asyncHandler(async (req, res) => {
             ...serverFolderFiles.map(f => ({
                 path: f.path,
                 url: f.url,
+                sha256: f.sha256,
                 size: f.size,
                 required: f.required
             })),

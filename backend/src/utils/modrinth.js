@@ -111,6 +111,9 @@ export async function findVersionByHash(hash) {
  * @returns {Promise<{downloadUrl: string, fileName: string, sha1: string}|null>}
  */
 export async function findModDownload(modName, modSlug, options = {}) {
+    // Jeśli brak nazwy i sluga, nie ma czego szukać
+    if (!modName && !modSlug) return null;
+
     // Próba 1: Szukaj po slug (najczęściej taki sam na obu platformach)
     const slugsToTry = [
         modSlug,
