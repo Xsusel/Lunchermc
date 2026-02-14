@@ -300,8 +300,9 @@ class ApiClient {
     /**
      * Pobiera pełną konfigurację dla launchera (z cache)
      */
-    async getLauncherConfig(forceRefresh = false) {
-        return this.request('/launcher/config', {}, {
+    async getLauncherConfig(serverId = null, forceRefresh = false) {
+        const query = serverId ? `?serverId=${serverId}` : '';
+        return this.request(`/launcher/config${query}`, {}, {
             useCache: true,
             cacheTTL: this.configCacheTTL,
             forceRefresh

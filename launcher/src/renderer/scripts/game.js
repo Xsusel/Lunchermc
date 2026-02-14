@@ -191,7 +191,8 @@ class GameLauncher {
             onStatusChange?.('Pobieranie konfiguracji...');
             onProgress?.(10, 'Pobieranie konfiguracji...');
 
-            const launcherConfig = await api.getLauncherConfig();
+            const selectedServerId = userConfig.selectedServer?.id || null;
+            const launcherConfig = await api.getLauncherConfig(selectedServerId, true);
 
             if (!launcherConfig.success) {
                 throw new Error('Nie można pobrać konfiguracji serwera');

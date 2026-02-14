@@ -8,7 +8,7 @@ import path from 'path';
 import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog, ServerRules, News, Server } from '../models/index.js';
 import { authenticateUser, optionalAuth } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { getClientIp, getUploadsPath, getServerSubPath, calculateSHA256 } from '../utils/helpers.js';
+import { getClientIp, getUploadsPath, getServerSubPath, calculateSHA256, calculateSHA256Sync } from '../utils/helpers.js';
 import { pingMinecraftServer, simplePing } from '../utils/mcPing.js';
 import db from '../config/database.js';
 
@@ -39,11 +39,13 @@ function scanServerFolderFiles(serverId) {
                 } else {
                     const relativePath = path.relative(folderPath, fullPath);
                     const stat = fs.statSync(fullPath);
+                    const sha256 = calculateSHA256Sync(fullPath);
                     files.push({
                         type,
                         path: `${type}/${relativePath}`,
                         filename: entry.name,
                         url: `/api/download/servers/${serverId}/files/${type}/${relativePath}`,
+                        sha256,
                         size: stat.size,
                         required: true
                     });
