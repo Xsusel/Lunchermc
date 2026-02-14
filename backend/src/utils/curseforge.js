@@ -19,6 +19,7 @@ const MODPACK_CLASS_ID = 4471;
 export const ModLoaderType = {
     Forge: 1,
     Fabric: 4,
+    NeoForge: 6,
 };
 
 /**
@@ -185,20 +186,83 @@ export async function getFileDownloadUrl(modId, fileId) {
 }
 
 /**
- * Get files list from a modpack manifest.
- * This returns the manifest's list of mods required by the modpack.
+ * Get file details for a modpack file.
  *
  * @param {number} modId - CurseForge modpack ID
  * @param {number} fileId - CurseForge modpack file ID
- * @returns {Promise<object>} Modpack manifest data
+ * @returns {Promise<object>} File details
  */
 export async function getModpackFiles(modId, fileId) {
     if (!modId) throw new Error('modId is required');
     if (!fileId) throw new Error('fileId is required');
 
-    // Get the file details which include the modules/dependencies
     const result = await cfFetch(`/mods/${modId}/files/${fileId}`);
     return result.data;
+}
+
+/**
+ * Extract mod list from a CurseForge modpack.
+ * Tries multiple strategies:
+ * 1. Uses `modules` field from the file API (contains projectId + fileId pairs)
+ * 2. Falls back to downloading the modpack ZIP and reading manifest.json
+ *
+ * @param {number} modId - CurseForge modpack ID
+ * @param {number} fileId - CurseForge modpack file ID
+ * @returns {Promise<Array<{projectID: number, fileID: number}>>} List of mod references
+ */
+export async function extractModpackManifest(modId, fileId) {
+    if (!modId) throw new Error('modId is required');
+    if (!fileId) throw new Error('fileId is required');
+
+    // Strategy 1: Check if file API returns modules with projectId + fileId
+    const fileData = await cfFetch(`/mods/${modId}/files/${fileId}`);
+    const file = fileData.data;
+
+    if (file.modules && file.modules.length > 0) {
+        // Some modpacks have modules with fingerprint-based resolution
+        // but we need projectID/fileID pairs - check if dependencies have them
+    }
+
+    // Strategy 2: Try dependencies field
+    if (file.dependencies && file.dependencies.length > 0) {
+        const modDeps = file.dependencies.filter(d => d.relationType === 3 || d.relationType === 6);
+        if (modDeps.length > 0 && modDeps.some(d => d.modId)) {
+            return modDeps.map(d => ({ projectID: d.modId, fileID: null }));
+        }
+    }
+
+    // Strategy 3: Download the modpack ZIP and read manifest.json
+    const downloadUrl = await getFileDownloadUrl(modId, fileId);
+    if (!downloadUrl) {
+        throw new Error('Nie udało się pobrać URL modpacka');
+    }
+
+    const { default: AdmZip } = await import('adm-zip');
+
+    const response = await fetch(downloadUrl);
+    if (!response.ok) {
+        throw new Error(`Nie udało się pobrać modpacka: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const zip = new AdmZip(buffer);
+
+    // CurseForge modpacks contain manifest.json at root level
+    const manifestEntry = zip.getEntry('manifest.json');
+    if (!manifestEntry) {
+        throw new Error('Brak manifest.json w paczce modpacka');
+    }
+
+    const manifestText = manifestEntry.getData().toString('utf8');
+    const manifest = JSON.parse(manifestText);
+
+    if (!manifest.files || manifest.files.length === 0) {
+        throw new Error('Manifest modpacka nie zawiera listy modów');
+    }
+
+    // manifest.files contains: { projectID, fileID, required }
+    return manifest.files;
 }
 
 /**
@@ -261,6 +325,7 @@ export default {
     getModFiles,
     getFileDownloadUrl,
     getModpackFiles,
+    extractModpackManifest,
     searchModpacks,
     getCategories,
     getGameVersions,

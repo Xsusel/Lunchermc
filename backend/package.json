@@ -18,6 +18,7 @@
     "moduleNameMapper": {}
   },
   "dependencies": {
+    "adm-zip": "^0.5.16",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^9.2.2",
     "compression": "^1.8.1",

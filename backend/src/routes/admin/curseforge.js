@@ -18,6 +18,7 @@ import {
     getModFiles as cfGetModFiles,
     getFileDownloadUrl as cfGetFileDownloadUrl,
     getModpackFiles as cfGetModpackFiles,
+    extractModpackManifest as cfExtractModpackManifest,
     getCategories as cfGetCategories,
     getGameVersions as cfGetGameVersions,
     MINECRAFT_GAME_ID,
@@ -259,6 +260,8 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
 
 // ============================================
 // POST /import-modpack - Import a modpack from CurseForge
+// Downloads the modpack ZIP, reads manifest.json to get the real
+// list of mods (projectID + fileID pairs), then downloads each mod.
 // ============================================
 router.post('/import-modpack', asyncHandler(async (req, res) => {
     const { modId, fileId, gameVersion, includeOptional } = req.body;
@@ -273,16 +276,21 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
     // 1. Get modpack info
     const cfModpack = await cfGetModById(parseInt(modId));
 
-    // 2. Get the modpack file details (contains manifest with mod list)
-    const modpackFile = await cfGetModpackFiles(parseInt(modId), parseInt(fileId));
-
-    // The dependencies list in the file contains the mods required by the modpack
-    const dependencies = modpackFile.dependencies || [];
-
-    if (dependencies.length === 0) {
+    // 2. Extract mod list from modpack manifest (downloads ZIP, reads manifest.json)
+    let manifestFiles;
+    try {
+        manifestFiles = await cfExtractModpackManifest(parseInt(modId), parseInt(fileId));
+    } catch (err) {
         return res.status(400).json({
             success: false,
-            error: 'No mods found in modpack manifest. The modpack may use a different format.',
+            error: `Nie udało się odczytać manifestu modpacka: ${err.message}`,
+        });
+    }
+
+    if (!manifestFiles || manifestFiles.length === 0) {
+        return res.status(400).json({
+            success: false,
+            error: 'Manifest modpacka nie zawiera żadnych modów.',
         });
     }
 
@@ -293,74 +301,92 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
         imported: [],
         skipped: [],
         failed: [],
-        total: dependencies.length,
+        total: manifestFiles.length,
     };
 
-    // 3. Process each mod in the modpack
-    for (const dep of dependencies) {
-        // Skip optional dependencies if not requested
-        if (!includeOptional && dep.relationType && dep.relationType !== 3) {
-            // relationType 3 = required dependency
-            // Others are optional, tool, incompatible, etc.
+    // 3. Process each mod from the manifest
+    for (const entry of manifestFiles) {
+        const projectId = entry.projectID;
+        const manifestFileId = entry.fileID;
+        const required = entry.required !== false; // default true
+
+        // Skip optional mods if not requested
+        if (!required && !includeOptional) {
             results.skipped.push({
-                modId: dep.modId,
-                reason: 'Optional dependency (includeOptional=false)',
+                modId: projectId,
+                reason: 'Opcjonalny mod (includeOptional=false)',
             });
             continue;
         }
 
         try {
-            // Get mod details
-            const depMod = await cfGetModById(dep.modId);
+            // Get mod details from CurseForge
+            const depMod = await cfGetModById(projectId);
 
-            // Get the latest file for the game version
-            const depFiles = await cfGetModFiles(dep.modId, {
-                gameVersion,
-                pageSize: 1,
-            });
+            // Get file info - use specific fileID from manifest if available
+            let depFile;
+            if (manifestFileId) {
+                try {
+                    const fileResult = await cfGetModpackFiles(projectId, manifestFileId);
+                    depFile = fileResult;
+                } catch {
+                    // Fallback: search for latest file for the game version
+                    const depFiles = await cfGetModFiles(projectId, {
+                        gameVersion,
+                        pageSize: 1,
+                    });
+                    depFile = depFiles.data?.[0];
+                }
+            } else {
+                const depFiles = await cfGetModFiles(projectId, {
+                    gameVersion,
+                    pageSize: 1,
+                });
+                depFile = depFiles.data?.[0];
+            }
 
-            if (!depFiles.data || depFiles.data.length === 0) {
+            if (!depFile) {
                 results.failed.push({
-                    modId: dep.modId,
+                    modId: projectId,
                     name: depMod.name,
-                    error: `No files found for game version ${gameVersion || 'any'}`,
+                    error: `Nie znaleziono pliku moda`,
                 });
                 continue;
             }
 
-            const depFile = depFiles.data[0];
             const safeFilename = sanitizeFilename(depFile.fileName);
 
-            // Check if already exists
+            // Check if already exists in database
             const existingMod = Mod.findByFilename(safeFilename);
             if (existingMod) {
                 results.skipped.push({
-                    modId: dep.modId,
+                    modId: projectId,
                     name: depMod.name,
                     filename: safeFilename,
-                    reason: 'Already exists in database',
+                    reason: 'Już istnieje w bazie',
                 });
                 continue;
             }
 
             // Get download URL
-            const downloadUrl = await cfGetFileDownloadUrl(dep.modId, depFile.id);
+            const targetFileId = manifestFileId || depFile.id;
+            const downloadUrl = await cfGetFileDownloadUrl(projectId, targetFileId);
             if (!downloadUrl) {
                 results.failed.push({
-                    modId: dep.modId,
+                    modId: projectId,
                     name: depMod.name,
-                    error: 'Download URL not available',
+                    error: 'URL pobierania niedostępny (autor wyłączył)',
                 });
                 continue;
             }
 
-            // Download
+            // Download the mod file
             const downloadResponse = await fetch(downloadUrl);
             if (!downloadResponse.ok) {
                 results.failed.push({
-                    modId: dep.modId,
+                    modId: projectId,
                     name: depMod.name,
-                    error: `Download failed: ${downloadResponse.status}`,
+                    error: `Pobieranie nieudane: ${downloadResponse.status}`,
                 });
                 continue;
             }
@@ -384,8 +410,8 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 is_enabled: true,
                 mod_type: 'mod',
                 description: depMod.summary || null,
-                curseforge_id: dep.modId,
-                curseforge_file_id: depFile.id,
+                curseforge_id: projectId,
+                curseforge_file_id: targetFileId,
                 curseforge_url: depMod.links?.websiteUrl || null,
             });
 
@@ -401,14 +427,14 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
 
             results.imported.push({
                 id: newMod.id,
-                modId: dep.modId,
+                modId: projectId,
                 name: depMod.name,
                 filename: safeFilename,
             });
 
         } catch (err) {
             results.failed.push({
-                modId: dep.modId,
+                modId: projectId,
                 error: err.message,
             });
         }
@@ -426,7 +452,7 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
 
     res.json({
         success: true,
-        message: `Modpack "${cfModpack.name}" import finished: ${results.imported.length} imported, ${results.skipped.length} skipped, ${results.failed.length} failed`,
+        message: `Modpack "${cfModpack.name}": ${results.imported.length} zaimportowano, ${results.skipped.length} pominięto, ${results.failed.length} nieudanych`,
         data: results,
     });
 }));
