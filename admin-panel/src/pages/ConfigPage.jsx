@@ -26,7 +26,8 @@ const MC_VERSIONS = [
 const LOADER_TYPES = [
     { value: 'vanilla', label: 'Vanilla', description: 'Czyste Minecraft bez modyfikacji' },
     { value: 'forge', label: 'Forge', description: 'Najpopularniejszy modloader' },
-    { value: 'fabric', label: 'Fabric', description: 'Lekki i szybki modloader' }
+    { value: 'fabric', label: 'Fabric', description: 'Lekki i szybki modloader' },
+    { value: 'neoforge', label: 'NeoForge', description: 'Nowoczesny fork Forge (MC 1.20.1+)' }
 ];
 
 function ConfigPage() {
@@ -38,7 +39,7 @@ function ConfigPage() {
     const [editingServer, setEditingServer] = useState(null);
     const [serverForm, setServerForm] = useState({
         name: '', description: '', ip: '', port: 25565, is_default: false,
-        game_version: '1.20.1', loader_type: 'vanilla', forge_version: '', fabric_version: '',
+        game_version: '1.20.1', loader_type: 'vanilla', forge_version: '', fabric_version: '', neoforge_version: '',
         java_args: '-Xmx4G -Xms2G -XX:+UseG1GC',
         maintenance_mode: false, maintenance_message: ''
     });
@@ -106,6 +107,7 @@ function ConfigPage() {
             loader_type: server.loader_type || 'vanilla',
             forge_version: server.forge_version || '',
             fabric_version: server.fabric_version || '',
+            neoforge_version: server.neoforge_version || '',
             java_args: server.java_args || '-Xmx4G -Xms2G -XX:+UseG1GC',
             maintenance_mode: !!server.maintenance_mode,
             maintenance_message: server.maintenance_message || ''
@@ -216,6 +218,7 @@ function ConfigPage() {
                 loader_type: server.loader_type || 'vanilla',
                 forge_version: server.forge_version || '',
                 fabric_version: server.fabric_version || '',
+                neoforge_version: server.neoforge_version || '',
                 java_args: server.java_args || '-Xmx4G -Xms2G -XX:+UseG1GC',
                 maintenance_mode: !!server.maintenance_mode,
                 maintenance_message: server.maintenance_message || ''
@@ -576,6 +579,18 @@ function ConfigPage() {
                                                 />
                                             </div>
                                         )}
+                                        {serverConfigForm.loader_type === 'neoforge' && (
+                                            <div>
+                                                <label className="label">Wersja NeoForge</label>
+                                                <input
+                                                    type="text"
+                                                    value={serverConfigForm.neoforge_version}
+                                                    onChange={(e) => handleConfigChange('neoforge_version', e.target.value)}
+                                                    className="input"
+                                                    placeholder="np. 47.1.106 lub 21.0.167"
+                                                />
+                                            </div>
+                                        )}
 
                                         {/* Java args */}
                                         <div className="md:col-span-2 lg:col-span-3">
@@ -766,6 +781,19 @@ function ConfigPage() {
                                         onChange={(e) => handleServerFormChange('fabric_version', e.target.value)}
                                         className="input"
                                         placeholder="np. 0.15.6"
+                                    />
+                                </div>
+                            )}
+
+                            {serverForm.loader_type === 'neoforge' && (
+                                <div>
+                                    <label className="label">Wersja NeoForge</label>
+                                    <input
+                                        type="text"
+                                        value={serverForm.neoforge_version}
+                                        onChange={(e) => handleServerFormChange('neoforge_version', e.target.value)}
+                                        className="input"
+                                        placeholder="np. 47.1.106 lub 21.0.167"
                                     />
                                 </div>
                             )}

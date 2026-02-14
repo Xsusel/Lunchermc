@@ -902,6 +902,7 @@ class GameManager {
                 version: config?.gameVersion || 'unknown',
                 loader: config?.loaderType || 'vanilla',
                 forgeVersion: config?.forgeVersion,
+                neoforgeVersion: config?.neoforgeVersion,
                 serverIp: config?.serverIp,
                 username: config?.username
             },
@@ -1267,6 +1268,89 @@ class GameManager {
             }
         } else {
             console.log(`Forge installer already exists at: ${installerPath}`);
+        }
+
+        return installerPath;
+    }
+
+    // ============================================
+    // NEOFORGE INSTALLATION
+    // ============================================
+
+    /**
+     * Pobiera URL instalatora NeoForge
+     */
+    getNeoForgeInstallerUrl(neoforgeVersion) {
+        return `https://maven.neoforged.net/releases/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-installer.jar`;
+    }
+
+    /**
+     * Sprawdza czy NeoForge jest zainstalowany
+     */
+    isNeoForgeInstalled(gamePath, mcVersion, neoforgeVersion) {
+        const possibleVersionIds = [
+            `neoforge-${neoforgeVersion}`,
+            `${mcVersion}-neoforge-${neoforgeVersion}`,
+            `neoforge-${mcVersion}-${neoforgeVersion}`
+        ];
+
+        for (const versionId of possibleVersionIds) {
+            const versionJsonPath = path.join(gamePath, 'versions', versionId, `${versionId}.json`);
+            if (fs.existsSync(versionJsonPath)) {
+                console.log(`NeoForge found at: ${versionJsonPath}`);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Pobiera installer NeoForge
+     */
+    async downloadNeoForgeInstaller(gamePath, mcVersion, neoforgeVersion) {
+        const neoforgeDir = path.join(gamePath, 'neoforge');
+        this.ensureDir(neoforgeDir);
+
+        const installerPath = path.join(neoforgeDir, `neoforge-${neoforgeVersion}-installer.jar`);
+
+        if (!fs.existsSync(installerPath)) {
+            const installerUrl = this.getNeoForgeInstallerUrl(neoforgeVersion);
+
+            this.sendToRenderer('game-status', { status: `Pobieranie NeoForge ${neoforgeVersion}...` });
+            this.sendToRenderer('download-progress', {
+                type: 'neoforge-installer',
+                name: `neoforge-${neoforgeVersion}-installer.jar`,
+                current: 0,
+                total: 1,
+                status: 'downloading'
+            });
+
+            console.log(`Downloading NeoForge installer from: ${installerUrl}`);
+
+            try {
+                await this.downloadFile(installerUrl, installerPath, (downloaded, total) => {
+                    const percent = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+                    this.sendToRenderer('download-progress', {
+                        type: 'neoforge-installer',
+                        name: `neoforge-${neoforgeVersion}-installer.jar`,
+                        current: 1,
+                        total: 1,
+                        status: 'downloading',
+                        bytes: downloaded,
+                        totalBytes: total,
+                        percent
+                    });
+                });
+                console.log(`NeoForge installer downloaded to: ${installerPath}`);
+            } catch (error) {
+                console.error('Failed to download NeoForge installer:', error);
+                if (fs.existsSync(installerPath)) {
+                    fs.unlinkSync(installerPath);
+                }
+                throw new Error(`Nie udało się pobrać NeoForge: ${error.message}`);
+            }
+        } else {
+            console.log(`NeoForge installer already exists at: ${installerPath}`);
         }
 
         return installerPath;
@@ -1798,13 +1882,12 @@ class GameManager {
                 throw new Error(`Nie znaleziono Java w: ${javaPath}`);
             }
 
-            // Przygotowanie Forge jeśli potrzebne
+            // Przygotowanie Forge / NeoForge jeśli potrzebne
             let forgeInstallerPath = null;
             if (config.loaderType === 'forge' && config.forgeVersion) {
                 this.sendToRenderer('game-status', { status: 'Przygotowanie Forge...' });
 
                 try {
-                    // Pobierz installer Forge (minecraft-launcher-core go zainstaluje)
                     forgeInstallerPath = await this.downloadForgeInstaller(
                         gamePath,
                         config.gameVersion,
@@ -1814,6 +1897,21 @@ class GameManager {
                 } catch (error) {
                     console.error('Forge preparation failed:', error);
                     throw new Error(`Nie udało się przygotować Forge: ${error.message}`);
+                }
+            } else if (config.loaderType === 'neoforge' && config.neoforgeVersion) {
+                this.sendToRenderer('game-status', { status: 'Przygotowanie NeoForge...' });
+
+                try {
+                    // NeoForge używa tego samego mechanizmu instalatora co Forge
+                    forgeInstallerPath = await this.downloadNeoForgeInstaller(
+                        gamePath,
+                        config.gameVersion,
+                        config.neoforgeVersion
+                    );
+                    console.log(`NeoForge installer ready at: ${forgeInstallerPath}`);
+                } catch (error) {
+                    console.error('NeoForge preparation failed:', error);
+                    throw new Error(`Nie udało się przygotować NeoForge: ${error.message}`);
                 }
             }
 
@@ -1974,7 +2072,8 @@ class GameManager {
                     } else if (e.type === 'classes') {
                         statusMessage = `Pobieranie klas Minecraft... (${e.current}/${e.total})`;
                     } else if (e.type === 'forge') {
-                        statusMessage = `Instalowanie Forge... (${e.current}/${e.total})`;
+                        const loaderName = config.loaderType === 'neoforge' ? 'NeoForge' : 'Forge';
+                        statusMessage = `Instalowanie ${loaderName}... (${e.current}/${e.total})`;
                     }
 
                     this.sendToRenderer('game-status', { status: statusMessage });

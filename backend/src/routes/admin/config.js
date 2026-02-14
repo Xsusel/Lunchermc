@@ -35,7 +35,7 @@ router.get('/config', asyncHandler(async (req, res) => {
 router.put('/config',
     [
         body('game_version').optional().matches(/^\d+\.\d+(\.\d+)?$/),
-        body('loader_type').optional().isIn(['vanilla', 'forge', 'fabric']),
+        body('loader_type').optional().isIn(['vanilla', 'forge', 'fabric', 'neoforge']),
         body('server_ip').optional().isString()
             .matches(/^[a-zA-Z0-9._-]+$/).withMessage('Nieprawidłowy adres serwera'),
         body('server_port').optional().isInt({ min: 1, max: 65535 })

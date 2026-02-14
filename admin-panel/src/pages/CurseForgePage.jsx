@@ -15,7 +15,8 @@ const PAGE_SIZE = 20;
 const MOD_LOADERS = [
     { value: '', label: 'Wszystkie loadery' },
     { value: '1', label: 'Forge' },
-    { value: '4', label: 'Fabric' }
+    { value: '4', label: 'Fabric' },
+    { value: '6', label: 'NeoForge' }
 ];
 
 function CurseForgePage() {
