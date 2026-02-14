@@ -1,14 +1,16 @@
 /**
- * Strona zarządzania modami
+ * Strona zarządzania modami - per-server
+ * Najpierw wybieramy serwer, potem przeglądamy/zarządzamy jego modami
  */
 import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { modsApi, filesApi } from '../api/client';
+import { modsApi, serversApi, filesApi } from '../api/client';
 import FileManager from '../components/FileManager';
 import {
     Package, Plus, Upload, Link as LinkIcon, Trash2,
     ToggleLeft, ToggleRight, Edit2, X, Loader2,
-    FileCode, Download, ExternalLink, RefreshCw
+    FileCode, Download, ExternalLink, RefreshCw,
+    Server, ChevronDown, FolderOpen, HardDrive, Trash
 } from 'lucide-react';
 
 function ModsPage() {
@@ -20,6 +22,11 @@ function ModsPage() {
     const [editModal, setEditModal] = useState({ open: false, mod: null });
     const [actionLoading, setActionLoading] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
+
+    // Server selection
+    const [servers, setServers] = useState([]);
+    const [selectedServerId, setSelectedServerId] = useState(null);
+    const [serversLoading, setServersLoading] = useState(true);
 
     const fileInputRef = useRef(null);
 
@@ -44,18 +51,47 @@ function ModsPage() {
         description: ''
     });
 
+    // Load servers on mount
     useEffect(() => {
-        if (activeTab === 'mods') {
-            loadMods();
-        }
-    }, [activeTab]);
+        loadServers();
+    }, []);
 
-    const loadMods = async () => {
+    // Load mods when server changes
+    useEffect(() => {
+        if (selectedServerId && activeTab === 'mods') {
+            loadServerMods();
+        }
+    }, [selectedServerId, activeTab]);
+
+    const loadServers = async () => {
+        try {
+            setServersLoading(true);
+            const response = await serversApi.getAll();
+            if (response.success && response.data) {
+                setServers(response.data);
+                // Auto-select default or first server
+                const defaultServer = response.data.find(s => s.is_default);
+                if (defaultServer) {
+                    setSelectedServerId(defaultServer.id);
+                } else if (response.data.length > 0) {
+                    setSelectedServerId(response.data[0].id);
+                }
+            }
+        } catch (error) {
+            toast.error('Błąd ładowania serwerów');
+        } finally {
+            setServersLoading(false);
+        }
+    };
+
+    const loadServerMods = async () => {
+        if (!selectedServerId) return;
         try {
             setLoading(true);
-            const response = await modsApi.getAll();
-            if (response.success) {
-                setMods(response.data);
+            const response = await serversApi.getMods(selectedServerId);
+            if (response.success && response.data) {
+                // Show only assigned mods, or all with assignment info
+                setMods(response.data.mods || []);
             }
         } catch (error) {
             toast.error('Błąd ładowania modów');
@@ -65,18 +101,12 @@ function ModsPage() {
     };
 
     const handleSync = async () => {
+        if (!selectedServerId) return;
         setActionLoading(true);
         try {
-            await Promise.all([
-                modsApi.sync(),
-                filesApi.sync()
-            ]);
-            toast.success('Synchronizacja zakończona');
-            if (activeTab === 'mods') {
-                loadMods();
-            } else {
-                setRefreshKey(prev => prev + 1);
-            }
+            await serversApi.sync(selectedServerId);
+            toast.success('Synchronizacja FTP zakończona');
+            loadServerMods();
         } catch (error) {
             console.error(error);
             toast.error('Błąd synchronizacji');
@@ -91,6 +121,10 @@ function ModsPage() {
             toast.error('Wybierz plik');
             return;
         }
+        if (!selectedServerId) {
+            toast.error('Wybierz serwer');
+            return;
+        }
 
         setActionLoading(true);
         try {
@@ -100,6 +134,7 @@ function ModsPage() {
             formData.append('description', uploadForm.description);
             formData.append('is_required', uploadForm.is_required);
             formData.append('mod_type', uploadForm.mod_type);
+            formData.append('serverId', selectedServerId);
 
             await modsApi.upload(formData);
             toast.success('Mod został dodany');
@@ -111,7 +146,7 @@ function ModsPage() {
                 is_required: true,
                 mod_type: 'mod'
             });
-            loadMods();
+            loadServerMods();
         } catch (error) {
             toast.error(error.response?.data?.error || 'Błąd uploadu');
         } finally {
@@ -121,9 +156,13 @@ function ModsPage() {
 
     const handleAddUrl = async (e) => {
         e.preventDefault();
+        if (!selectedServerId) {
+            toast.error('Wybierz serwer');
+            return;
+        }
         setActionLoading(true);
         try {
-            await modsApi.addByUrl(urlForm);
+            await modsApi.addByUrl({ ...urlForm, serverId: selectedServerId });
             toast.success('Mod został dodany');
             setUrlModal(false);
             setUrlForm({
@@ -136,7 +175,7 @@ function ModsPage() {
                 mod_type: 'mod',
                 description: ''
             });
-            loadMods();
+            loadServerMods();
         } catch (error) {
             toast.error(error.response?.data?.error || 'Błąd dodawania moda');
         } finally {
@@ -144,25 +183,69 @@ function ModsPage() {
         }
     };
 
-    const handleToggle = async (mod) => {
+    const handleToggleMod = async (mod) => {
+        if (!selectedServerId) return;
         try {
-            await modsApi.toggle(mod.id);
-            toast.success(mod.is_enabled ? 'Mod wyłączony' : 'Mod włączony');
-            loadMods();
+            if (mod.assigned) {
+                await serversApi.toggleMod(selectedServerId, mod.id);
+                toast.success(mod.server_enabled ? 'Mod wyłączony na serwerze' : 'Mod włączony na serwerze');
+            } else {
+                await modsApi.toggle(mod.id);
+                toast.success(mod.is_enabled ? 'Mod wyłączony' : 'Mod włączony');
+            }
+            loadServerMods();
         } catch (error) {
             toast.error('Błąd zmiany statusu');
         }
     };
 
-    const handleDelete = async (mod) => {
-        if (!confirm(`Czy na pewno chcesz usunąć mod "${mod.name}"?`)) return;
+    const handleRemoveFromServer = async (mod) => {
+        if (!selectedServerId) return;
+        if (!confirm(`Usunąć mod "${mod.name}" z tego serwera?`)) return;
+
+        try {
+            await serversApi.removeMod(selectedServerId, mod.id);
+            toast.success('Mod usunięty z serwera');
+            loadServerMods();
+        } catch (error) {
+            toast.error('Błąd usuwania moda');
+        }
+    };
+
+    const handleDeleteMod = async (mod) => {
+        if (!confirm(`Czy na pewno chcesz TRWALE usunąć mod "${mod.name}"? Plik zostanie usunięty z dysku.`)) return;
 
         try {
             await modsApi.delete(mod.id);
-            toast.success('Mod został usunięty');
-            loadMods();
+            toast.success('Mod został trwale usunięty');
+            loadServerMods();
         } catch (error) {
             toast.error('Błąd usuwania moda');
+        }
+    };
+
+    const handleAssignMod = async (mod) => {
+        if (!selectedServerId) return;
+        try {
+            await serversApi.assignMod(selectedServerId, mod.id);
+            toast.success(`Mod "${mod.name}" przypisany do serwera`);
+            loadServerMods();
+        } catch (error) {
+            toast.error('Błąd przypisywania moda');
+        }
+    };
+
+    const handleClearMods = async () => {
+        if (!selectedServerId) return;
+        const srv = servers.find(s => s.id === selectedServerId);
+        if (!confirm(`Usunąć WSZYSTKIE mody i pliki z serwera "${srv?.name}"? To usunie fizyczne pliki z dysku!`)) return;
+
+        try {
+            await serversApi.clearFiles(selectedServerId);
+            toast.success('Wyczyszczono wszystkie pliki serwera');
+            loadServerMods();
+        } catch (error) {
+            toast.error('Błąd czyszczenia');
         }
     };
 
@@ -173,7 +256,7 @@ function ModsPage() {
             await modsApi.update(editModal.mod.id, editModal.mod);
             toast.success('Mod został zaktualizowany');
             setEditModal({ open: false, mod: null });
-            loadMods();
+            loadServerMods();
         } catch (error) {
             toast.error('Błąd aktualizacji moda');
         } finally {
@@ -192,12 +275,18 @@ function ModsPage() {
         }
     };
 
+    // Filtruj mody - pokaż przypisane do serwera
+    const assignedMods = mods.filter(m => m.assigned);
+    const unassignedMods = mods.filter(m => !m.assigned);
+
+    const selectedServer = servers.find(s => s.id === selectedServerId);
+
     // Statystyki
     const stats = {
-        total: mods.length,
-        enabled: mods.filter(m => m.is_enabled).length,
-        required: mods.filter(m => m.is_required).length,
-        totalSize: mods.reduce((acc, m) => acc + (m.file_size || 0), 0)
+        total: assignedMods.length,
+        enabled: assignedMods.filter(m => m.server_enabled && m.is_enabled).length,
+        required: assignedMods.filter(m => m.is_required).length,
+        totalSize: assignedMods.reduce((acc, m) => acc + (m.file_size || 0), 0)
     };
 
     const getTabTitle = (tab) => {
@@ -211,6 +300,26 @@ function ModsPage() {
         }
     };
 
+    if (serversLoading) {
+        return (
+            <div className="flex items-center justify-center h-64">
+                <div className="loader" />
+            </div>
+        );
+    }
+
+    if (servers.length === 0) {
+        return (
+            <div className="space-y-6 animate-fadeIn">
+                <div className="card text-center py-12">
+                    <Server className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                    <h2 className="text-xl font-bold text-white mb-2">Brak serwerów</h2>
+                    <p className="text-gray-400">Dodaj serwer w zakładce "Serwery" aby zarządzać modami</p>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6 animate-fadeIn">
             {/* Nagłówek */}
@@ -220,37 +329,88 @@ function ModsPage() {
                         <Package className="w-7 h-7 text-mc-green" />
                         Menadżer Treści
                     </h1>
-                    <p className="text-gray-400">Zarządzaj modami i plikami gry</p>
+                    <p className="text-gray-400">Zarządzaj modami i plikami gry per serwer</p>
                 </div>
 
                 <div className="flex gap-2">
-                    <button
-                        onClick={handleSync}
-                        className="btn btn-secondary"
-                        disabled={actionLoading}
-                    >
-                        <RefreshCw className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
-                        Sync
-                    </button>
-                    {activeTab === 'mods' && (
+                    {activeTab === 'mods' && selectedServerId && (
                         <>
+                            <button
+                                onClick={handleSync}
+                                className="btn btn-secondary"
+                                disabled={actionLoading}
+                                title="Synchronizuj z FTP"
+                            >
+                                <RefreshCw className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
+                                Sync FTP
+                            </button>
                             <button
                                 onClick={() => setUrlModal(true)}
                                 className="btn btn-secondary"
                             >
                                 <LinkIcon className="w-4 h-4" />
-                                Dodaj przez URL
+                                URL
                             </button>
                             <button
                                 onClick={() => setUploadModal(true)}
                                 className="btn btn-primary"
                             >
                                 <Upload className="w-4 h-4" />
-                                Prześlij plik
+                                Prześlij
                             </button>
                         </>
                     )}
                 </div>
+            </div>
+
+            {/* Server selector */}
+            <div className="card">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                    <div className="flex items-center gap-2 text-gray-400">
+                        <HardDrive className="w-5 h-5" />
+                        <span className="font-medium">Serwer:</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 flex-1">
+                        {servers.map(srv => (
+                            <button
+                                key={srv.id}
+                                onClick={() => setSelectedServerId(srv.id)}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                                    selectedServerId === srv.id
+                                        ? 'bg-mc-green text-black'
+                                        : 'bg-mc-gray text-gray-300 hover:bg-mc-gray/80 hover:text-white'
+                                }`}
+                            >
+                                {srv.name}
+                                {srv.is_default ? ' (domyślny)' : ''}
+                                {srv.mod_count !== undefined && (
+                                    <span className="ml-2 opacity-70">({srv.mod_count})</span>
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                    {selectedServerId && activeTab === 'mods' && (
+                        <button
+                            onClick={handleClearMods}
+                            className="btn btn-secondary text-red-400 hover:bg-red-900/30 shrink-0"
+                            title="Wyczyść wszystkie pliki serwera"
+                        >
+                            <Trash className="w-4 h-4" />
+                            Wyczyść
+                        </button>
+                    )}
+                </div>
+                {selectedServer && (
+                    <div className="mt-3 flex gap-4 text-xs text-gray-500">
+                        <span>{selectedServer.game_version || '?'}</span>
+                        <span>{selectedServer.loader_type || 'vanilla'}</span>
+                        <span>{selectedServer.ip}:{selectedServer.port || 25565}</span>
+                        <span className="flex items-center gap-1">
+                            <FolderOpen className="w-3 h-3" />
+                            uploads/servers/{selectedServer.id}/
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Zakładki */}
@@ -279,18 +439,6 @@ function ModsPage() {
                 >
                     Configs
                 </button>
-                <button
-                    onClick={() => setActiveTab('datapacks')}
-                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'datapacks' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
-                >
-                    Data Packs
-                </button>
-                <button
-                    onClick={() => setActiveTab('defaultconfigs')}
-                    className={`pb-2 px-1 whitespace-nowrap ${activeTab === 'defaultconfigs' ? 'border-b-2 border-mc-green text-white' : 'text-gray-400 hover:text-gray-300'}`}
-                >
-                    Default Configs
-                </button>
             </div>
 
             {activeTab === 'mods' ? (
@@ -299,7 +447,7 @@ function ModsPage() {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div className="card py-4 text-center">
                             <p className="text-2xl font-bold text-white">{stats.total}</p>
-                            <p className="text-sm text-gray-500">Wszystkich modów</p>
+                            <p className="text-sm text-gray-500">Przypisanych modów</p>
                         </div>
                         <div className="card py-4 text-center">
                             <p className="text-2xl font-bold text-green-400">{stats.enabled}</p>
@@ -315,13 +463,16 @@ function ModsPage() {
                         </div>
                     </div>
 
-                    {/* Lista modów */}
+                    {/* Lista modów przypisanych do serwera */}
                     <div className="card overflow-hidden p-0">
+                        <div className="px-4 py-3 border-b border-mc-gray flex items-center justify-between">
+                            <h3 className="text-sm font-semibold text-white">Mody na serwerze</h3>
+                        </div>
                         {loading ? (
-                            <div className="flex items-center justify-center h-64">
+                            <div className="flex items-center justify-center h-48">
                                 <div className="loader" />
                             </div>
-                        ) : mods.length > 0 ? (
+                        ) : assignedMods.length > 0 ? (
                             <div className="overflow-x-auto">
                                 <table className="table">
                                     <thead>
@@ -335,8 +486,8 @@ function ModsPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {mods.map((mod) => (
-                                            <tr key={mod.id}>
+                                        {assignedMods.map((mod) => (
+                                            <tr key={mod.id} className={!mod.server_enabled ? 'opacity-50' : ''}>
                                                 <td>
                                                     <div className="flex items-center gap-3">
                                                         <div className="w-10 h-10 bg-mc-gray rounded-lg flex items-center justify-center">
@@ -367,28 +518,28 @@ function ModsPage() {
                                                 </td>
                                                 <td>
                                                     <button
-                                                        onClick={() => handleToggle(mod)}
+                                                        onClick={() => handleToggleMod(mod)}
                                                         className={`flex items-center gap-1 text-sm ${
-                                                            mod.is_enabled ? 'text-green-400' : 'text-gray-500'
+                                                            mod.server_enabled ? 'text-green-400' : 'text-gray-500'
                                                         }`}
                                                     >
-                                                        {mod.is_enabled ? (
+                                                        {mod.server_enabled ? (
                                                             <ToggleRight className="w-5 h-5" />
                                                         ) : (
                                                             <ToggleLeft className="w-5 h-5" />
                                                         )}
-                                                        {mod.is_enabled ? 'Włączony' : 'Wyłączony'}
+                                                        {mod.server_enabled ? 'Włączony' : 'Wyłączony'}
                                                     </button>
                                                 </td>
                                                 <td>
-                                                    <div className="flex items-center justify-end gap-2">
-                                                        {mod.url && !mod.url.startsWith('/api') && (
+                                                    <div className="flex items-center justify-end gap-1">
+                                                        {mod.curseforge_url && (
                                                             <a
-                                                                href={mod.url}
+                                                                href={mod.curseforge_url}
                                                                 target="_blank"
                                                                 rel="noopener noreferrer"
                                                                 className="p-2 hover:bg-mc-gray rounded-lg text-gray-400 transition-colors"
-                                                                title="Otwórz link"
+                                                                title="CurseForge"
                                                             >
                                                                 <ExternalLink className="w-4 h-4" />
                                                             </a>
@@ -401,9 +552,16 @@ function ModsPage() {
                                                             <Edit2 className="w-4 h-4" />
                                                         </button>
                                                         <button
-                                                            onClick={() => handleDelete(mod)}
+                                                            onClick={() => handleRemoveFromServer(mod)}
+                                                            className="p-2 hover:bg-yellow-900/30 rounded-lg text-yellow-400 transition-colors"
+                                                            title="Usuń z serwera (zachowaj w bazie)"
+                                                        >
+                                                            <X className="w-4 h-4" />
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleDeleteMod(mod)}
                                                             className="p-2 hover:bg-red-900/30 rounded-lg text-red-400 transition-colors"
-                                                            title="Usuń"
+                                                            title="Usuń trwale (plik + baza)"
                                                         >
                                                             <Trash2 className="w-4 h-4" />
                                                         </button>
@@ -417,11 +575,48 @@ function ModsPage() {
                         ) : (
                             <div className="text-center py-12">
                                 <Package className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-                                <p className="text-gray-500">Brak modów</p>
-                                <p className="text-gray-600 text-sm">Dodaj pierwszy mod klikając przycisk powyżej</p>
+                                <p className="text-gray-500">Brak modów na tym serwerze</p>
+                                <p className="text-gray-600 text-sm">Dodaj mody przyciskiem "Prześlij" lub zaimportuj z CurseForge</p>
                             </div>
                         )}
                     </div>
+
+                    {/* Unassigned mods - mody dostępne do przypisania */}
+                    {unassignedMods.length > 0 && (
+                        <div className="card overflow-hidden p-0">
+                            <div className="px-4 py-3 border-b border-mc-gray">
+                                <h3 className="text-sm font-semibold text-gray-400">
+                                    Dostępne mody (nieprzypisane) - {unassignedMods.length}
+                                </h3>
+                            </div>
+                            <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                                <table className="table">
+                                    <tbody>
+                                        {unassignedMods.map((mod) => (
+                                            <tr key={mod.id} className="opacity-60 hover:opacity-100 transition-opacity">
+                                                <td>
+                                                    <div className="flex items-center gap-3">
+                                                        <FileCode className="w-4 h-4 text-gray-500" />
+                                                        <span className="text-gray-300 text-sm">{mod.name}</span>
+                                                    </div>
+                                                </td>
+                                                <td className="text-gray-500 text-xs font-mono">{mod.filename}</td>
+                                                <td className="text-gray-500 text-xs">{formatBytes(mod.file_size)}</td>
+                                                <td className="text-right">
+                                                    <button
+                                                        onClick={() => handleAssignMod(mod)}
+                                                        className="px-3 py-1 text-xs bg-mc-green/20 text-mc-green rounded hover:bg-mc-green/30 transition-colors"
+                                                    >
+                                                        + Przypisz
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                 </>
             ) : (
                 <FileManager
@@ -433,7 +628,7 @@ function ModsPage() {
 
             {/* Modal uploadu */}
             {uploadModal && (
-                <Modal title="Prześlij mod" onClose={() => setUploadModal(false)}>
+                <Modal title={`Prześlij mod → ${selectedServer?.name || 'serwer'}`} onClose={() => setUploadModal(false)}>
                     <form onSubmit={handleUpload} className="space-y-4">
                         <div
                             onClick={() => fileInputRef.current?.click()}
@@ -521,7 +716,7 @@ function ModsPage() {
 
             {/* Modal URL */}
             {urlModal && (
-                <Modal title="Dodaj mod przez URL" onClose={() => setUrlModal(false)}>
+                <Modal title={`Dodaj mod przez URL → ${selectedServer?.name || 'serwer'}`} onClose={() => setUrlModal(false)}>
                     <form onSubmit={handleAddUrl} className="space-y-4">
                         <div>
                             <label className="label">Nazwa moda *</label>
