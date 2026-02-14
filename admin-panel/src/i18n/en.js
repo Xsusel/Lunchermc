@@ -1,0 +1,113 @@
+export default {
+    common: {
+        save: 'Save',
+        cancel: 'Cancel',
+        delete: 'Delete',
+        edit: 'Edit',
+        add: 'Add',
+        search: 'Search',
+        loading: 'Loading...',
+        confirm: 'Confirm',
+        close: 'Close',
+        yes: 'Yes',
+        no: 'No',
+        back: 'Back',
+        refresh: 'Refresh',
+        actions: 'Actions',
+        status: 'Status',
+        enabled: 'Enabled',
+        disabled: 'Disabled',
+        required: 'Required',
+        optional: 'Optional',
+        name: 'Name',
+        description: 'Description',
+        created: 'Created',
+        updated: 'Updated',
+        error: 'Error',
+        success: 'Success',
+        noData: 'No data'
+    },
+    nav: {
+        dashboard: 'Dashboard',
+        users: 'Users',
+        mods: 'Mods',
+        config: 'Configuration',
+        broadcasts: 'Broadcasts',
+        logs: 'Logs',
+        launcherVersions: 'Launcher Versions',
+        system: 'System',
+        logout: 'Logout'
+    },
+    auth: {
+        login: 'Login',
+        username: 'Username',
+        password: 'Password',
+        loginButton: 'Sign In',
+        invalidCredentials: 'Invalid credentials',
+        twoFactorCode: '2FA Code',
+        twoFactorRequired: 'Two-factor authentication required'
+    },
+    dashboard: {
+        title: 'Dashboard',
+        totalUsers: 'Total Users',
+        activeMods: 'Active Mods',
+        gameVersion: 'Game Version',
+        activeBroadcasts: 'Active Broadcasts',
+        recentActivity: 'Recent Activity',
+        serverStatus: 'Server Status'
+    },
+    users: {
+        title: 'User Management',
+        ban: 'Ban',
+        unban: 'Unban',
+        banReason: 'Ban Reason',
+        banned: 'Banned',
+        active: 'Active',
+        lastLogin: 'Last Login',
+        playtime: 'Playtime',
+        deleteConfirm: 'Are you sure you want to delete this user?'
+    },
+    mods: {
+        title: 'Mod Management',
+        uploadMod: 'Upload Mod',
+        addByUrl: 'Add by URL',
+        fileName: 'File Name',
+        fileSize: 'File Size',
+        sha256: 'SHA256 Hash',
+        modType: 'Mod Type',
+        toggleEnabled: 'Toggle Enabled'
+    },
+    config: {
+        title: 'Game Configuration',
+        gameVersion: 'Minecraft Version',
+        loaderType: 'Loader Type',
+        serverIp: 'Server IP',
+        serverPort: 'Server Port',
+        javaArgs: 'Java Arguments',
+        maintenance: 'Maintenance Mode',
+        maintenanceMessage: 'Maintenance Message',
+        servers: 'Servers',
+        addServer: 'Add Server',
+        defaultServer: 'Default Server'
+    },
+    broadcasts: {
+        title: 'Broadcasts',
+        newBroadcast: 'New Broadcast',
+        message: 'Message',
+        type: 'Type',
+        priority: 'Priority',
+        expiresAt: 'Expires At',
+        activate: 'Activate',
+        deactivate: 'Deactivate'
+    },
+    system: {
+        title: 'System',
+        health: 'System Health',
+        backups: 'Backups',
+        createBackup: 'Create Backup',
+        restoreBackup: 'Restore Backup',
+        twoFactor: 'Two-Factor Authentication',
+        enable2FA: 'Enable 2FA',
+        disable2FA: 'Disable 2FA'
+    }
+};

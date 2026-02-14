@@ -59,8 +59,8 @@ router.post('/register',
         // Logujemy rejestrację
         ActivityLog.logRegistration(user.id, getClientIp(req));
 
-        // Generujemy token
-        const token = generateUserToken(user);
+        // Generujemy token z IP binding
+        const token = generateUserToken(user, getClientIp(req));
 
         res.status(201).json({
             success: true,
@@ -119,8 +119,8 @@ router.post('/login',
         // Logujemy logowanie
         ActivityLog.logLogin(user.id, getClientIp(req));
 
-        // Generujemy token
-        const token = generateUserToken(user);
+        // Generujemy token z IP binding
+        const token = generateUserToken(user, getClientIp(req));
 
         res.json({
             success: true,

@@ -798,6 +798,13 @@ function initPlayButton() {
 }
 
 async function handlePlay() {
+    // Blokada gry gdy wymagana aktualizacja jest dostępna
+    if (pendingUpdate?.isRequired) {
+        showUpdateModal(pendingUpdate);
+        showToast('Wymagana aktualizacja launchera. Pobierz ją, aby kontynuować.', 'warning');
+        return;
+    }
+
     if (!state.isLoggedIn) {
         openModal('login');
         return;
@@ -1678,11 +1685,19 @@ let pendingUpdate = null;
  * Inicjalizuje system automatycznych aktualizacji
  */
 function initAutoUpdate() {
-    // Zamykanie modalu aktualizacji
-    elements.updateModalClose?.addEventListener('click', () => closeModal('update'));
-    elements.btnUpdateLater?.addEventListener('click', () => closeModal('update'));
+    // Zamykanie modalu aktualizacji (z blokadą dla wymaganych aktualizacji)
+    const closeUpdateIfAllowed = () => {
+        if (pendingUpdate?.isRequired) {
+            showToast('Ta aktualizacja jest wymagana. Pobierz ją, aby kontynuować.', 'warning');
+            return;
+        }
+        closeModal('update');
+    };
+
+    elements.updateModalClose?.addEventListener('click', closeUpdateIfAllowed);
+    elements.btnUpdateLater?.addEventListener('click', closeUpdateIfAllowed);
     elements.updateModal?.addEventListener('click', (e) => {
-        if (e.target === elements.updateModal) closeModal('update');
+        if (e.target === elements.updateModal) closeUpdateIfAllowed();
     });
 
     // Przycisk aktualizacji

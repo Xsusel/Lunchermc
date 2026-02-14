@@ -18,14 +18,15 @@ function DashboardPage() {
     const { stats, setStats } = useDataStore();
     const [loading, setLoading] = useState(true);
     const [serverStatus, setServerStatus] = useState(null);
+    const [serversStatus, setServersStatus] = useState(null);
     const [serverLoading, setServerLoading] = useState(true);
 
     useEffect(() => {
         loadStats();
-        loadServerStatus();
+        loadAllServersStatus();
 
-        // Odswiez status serwera co 30 sekund
-        const interval = setInterval(loadServerStatus, 30000);
+        // Odswiez status serwerow co 30 sekund
+        const interval = setInterval(loadAllServersStatus, 30000);
         return () => clearInterval(interval);
     }, []);
 
@@ -42,16 +43,28 @@ function DashboardPage() {
         }
     };
 
-    const loadServerStatus = async () => {
+    const loadAllServersStatus = async () => {
         try {
             setServerLoading(true);
-            const response = await dashboardApi.getServerStatus();
+            const response = await dashboardApi.getAllServersStatus();
             if (response.success) {
-                setServerStatus(response.data);
+                setServersStatus(response.data);
+                // Kompatybilność wsteczna - ustaw domyślny serwer jako serverStatus
+                const defaultServer = response.data.servers?.find(s => s.isDefault) || response.data.servers?.[0];
+                if (defaultServer) {
+                    setServerStatus(defaultServer);
+                }
             }
         } catch (error) {
-            console.error('Error loading server status:', error);
-            setServerStatus(null);
+            // Fallback do starego endpointu
+            try {
+                const response = await dashboardApi.getServerStatus();
+                if (response.success) {
+                    setServerStatus(response.data);
+                }
+            } catch {
+                setServerStatus(null);
+            }
         } finally {
             setServerLoading(false);
         }
@@ -84,15 +97,20 @@ function DashboardPage() {
                 </div>
             )}
 
-            {/* Status serwera MC */}
+            {/* Status serwerów MC */}
             <div className="card">
                 <div className="flex items-center justify-between mb-4">
                     <div className="card-header mb-0">
                         <Server className="w-5 h-5 text-mc-green" />
-                        Status Serwera Minecraft
+                        Status Serwerów Minecraft
+                        {serversStatus?.summary && (
+                            <span className="text-sm font-normal text-gray-400 ml-2">
+                                ({serversStatus.summary.onlineServers}/{serversStatus.summary.totalServers} online, {serversStatus.summary.totalPlayersOnline} graczy)
+                            </span>
+                        )}
                     </div>
                     <button
-                        onClick={loadServerStatus}
+                        onClick={loadAllServersStatus}
                         disabled={serverLoading}
                         className="btn btn-sm btn-secondary"
                     >
@@ -100,88 +118,95 @@ function DashboardPage() {
                     </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {/* Status */}
-                    <div className={`p-4 rounded-lg flex items-center gap-4 ${
-                        serverStatus?.online
-                            ? 'bg-green-900/20 border border-green-800'
-                            : 'bg-red-900/20 border border-red-800'
-                    }`}>
-                        {serverStatus?.online ? (
-                            <Wifi className="w-8 h-8 text-green-500" />
-                        ) : (
-                            <WifiOff className="w-8 h-8 text-red-500" />
-                        )}
-                        <div>
-                            <p className={`text-lg font-bold ${serverStatus?.online ? 'text-green-400' : 'text-red-400'}`}>
-                                {serverStatus?.online ? 'ONLINE' : 'OFFLINE'}
-                            </p>
-                            <p className="text-sm text-gray-400">
-                                {serverStatus?.ip}:{serverStatus?.port || 25565}
-                            </p>
-                        </div>
-                    </div>
-
-                    {/* Gracze online */}
-                    <div className="p-4 rounded-lg bg-mc-darker border border-mc-gray">
-                        <div className="flex items-center gap-3">
-                            <Users className="w-8 h-8 text-blue-400" />
-                            <div>
-                                <p className="text-2xl font-bold text-white">
-                                    {serverStatus?.players?.online || 0}
-                                    <span className="text-gray-500 text-lg">/{serverStatus?.players?.max || 0}</span>
-                                </p>
-                                <p className="text-sm text-gray-400">Graczy online</p>
-                            </div>
-                        </div>
-
-                        {/* Lista graczy (jesli dostepna) */}
-                        {serverStatus?.players?.sample?.length > 0 && (
-                            <div className="mt-3 pt-3 border-t border-mc-gray">
-                                <p className="text-xs text-gray-500 mb-2">Aktywni gracze:</p>
-                                <div className="flex flex-wrap gap-1">
-                                    {serverStatus.players.sample.slice(0, 5).map((player, i) => (
-                                        <span key={i} className="text-xs bg-mc-gray px-2 py-1 rounded text-white">
-                                            {player.name}
+                {serversStatus?.servers?.length > 0 ? (
+                    <div className="space-y-3">
+                        {serversStatus.servers.map((srv) => (
+                            <div key={srv.id} className={`p-4 rounded-lg border flex items-center gap-4 ${
+                                srv.online
+                                    ? 'bg-green-900/10 border-green-800/50'
+                                    : 'bg-red-900/10 border-red-800/50'
+                            }`}>
+                                {srv.online ? (
+                                    <Wifi className="w-6 h-6 text-green-500 flex-shrink-0" />
+                                ) : (
+                                    <WifiOff className="w-6 h-6 text-red-500 flex-shrink-0" />
+                                )}
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                        <p className="font-medium text-white">{srv.name}</p>
+                                        {srv.isDefault && (
+                                            <span className="px-1.5 py-0.5 text-xs bg-mc-accent/20 text-mc-accent rounded">Domyślny</span>
+                                        )}
+                                        <span className={`text-xs ${srv.online ? 'text-green-400' : 'text-red-400'}`}>
+                                            {srv.online ? 'ONLINE' : 'OFFLINE'}
                                         </span>
-                                    ))}
-                                    {serverStatus.players.sample.length > 5 && (
-                                        <span className="text-xs text-gray-500 px-2 py-1">
-                                            +{serverStatus.players.sample.length - 5} wiecej
-                                        </span>
-                                    )}
+                                    </div>
+                                    <p className="text-xs text-gray-500 font-mono">{srv.ip}:{srv.port || 25565}</p>
                                 </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Info o serwerze */}
-                    <div className="p-4 rounded-lg bg-mc-darker border border-mc-gray">
-                        <div className="space-y-2">
-                            <div className="flex justify-between text-sm">
-                                <span className="text-gray-500">Wersja:</span>
-                                <span className="text-white">{serverStatus?.version || 'N/A'}</span>
-                            </div>
-                            <div className="flex justify-between text-sm">
-                                <span className="text-gray-500">Ping:</span>
-                                <span className={`${
-                                    serverStatus?.latency < 50 ? 'text-green-400' :
-                                    serverStatus?.latency < 100 ? 'text-yellow-400' : 'text-red-400'
-                                }`}>
-                                    {serverStatus?.latency ? `${serverStatus.latency}ms` : 'N/A'}
-                                </span>
-                            </div>
-                            {serverStatus?.description && (
-                                <div className="pt-2 border-t border-mc-gray">
-                                    <p className="text-xs text-gray-500">MOTD:</p>
-                                    <p className="text-xs text-white truncate" title={serverStatus.description}>
-                                        {serverStatus.description}
+                                <div className="text-right flex-shrink-0">
+                                    <p className="text-lg font-bold text-white">
+                                        {srv.players?.online || 0}<span className="text-gray-500 text-sm">/{srv.players?.max || 0}</span>
+                                    </p>
+                                    <p className="text-xs text-gray-500">
+                                        {srv.latency ? `${srv.latency}ms` : '—'}
+                                        {srv.version && ` · ${srv.version}`}
                                     </p>
                                 </div>
-                            )}
+                                {srv.players?.sample?.length > 0 && (
+                                    <div className="hidden lg:flex flex-wrap gap-1 flex-shrink-0 max-w-[200px]">
+                                        {srv.players.sample.slice(0, 3).map((p, i) => (
+                                            <span key={i} className="text-xs bg-mc-gray px-1.5 py-0.5 rounded text-white">{p.name}</span>
+                                        ))}
+                                        {srv.players.sample.length > 3 && (
+                                            <span className="text-xs text-gray-500">+{srv.players.sample.length - 3}</span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                ) : serverStatus ? (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className={`p-4 rounded-lg flex items-center gap-4 ${
+                            serverStatus?.online ? 'bg-green-900/20 border border-green-800' : 'bg-red-900/20 border border-red-800'
+                        }`}>
+                            {serverStatus?.online ? <Wifi className="w-8 h-8 text-green-500" /> : <WifiOff className="w-8 h-8 text-red-500" />}
+                            <div>
+                                <p className={`text-lg font-bold ${serverStatus?.online ? 'text-green-400' : 'text-red-400'}`}>
+                                    {serverStatus?.online ? 'ONLINE' : 'OFFLINE'}
+                                </p>
+                                <p className="text-sm text-gray-400">{serverStatus?.ip}:{serverStatus?.port || 25565}</p>
+                            </div>
+                        </div>
+                        <div className="p-4 rounded-lg bg-mc-darker border border-mc-gray">
+                            <div className="flex items-center gap-3">
+                                <Users className="w-8 h-8 text-blue-400" />
+                                <div>
+                                    <p className="text-2xl font-bold text-white">
+                                        {serverStatus?.players?.online || 0}<span className="text-gray-500 text-lg">/{serverStatus?.players?.max || 0}</span>
+                                    </p>
+                                    <p className="text-sm text-gray-400">Graczy online</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-4 rounded-lg bg-mc-darker border border-mc-gray">
+                            <div className="space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-500">Wersja:</span>
+                                    <span className="text-white">{serverStatus?.version || 'N/A'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-500">Ping:</span>
+                                    <span className={serverStatus?.latency < 50 ? 'text-green-400' : serverStatus?.latency < 100 ? 'text-yellow-400' : 'text-red-400'}>
+                                        {serverStatus?.latency ? `${serverStatus.latency}ms` : 'N/A'}
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                </div>
+                ) : (
+                    <p className="text-gray-500 text-center py-4">Brak skonfigurowanych serwerów</p>
+                )}
             </div>
 
             {/* Statystyki */}
@@ -194,6 +219,12 @@ function DashboardPage() {
                     <div>
                         <p className="stat-value">{stats?.users?.total || 0}</p>
                         <p className="stat-label">Uzytkownikow</p>
+                        {(stats?.users?.active > 0 || stats?.users?.newToday > 0) && (
+                            <p className="text-xs text-gray-500 mt-1">
+                                {stats?.users?.active > 0 && <span className="text-green-400">{stats.users.active} aktywnych</span>}
+                                {stats?.users?.newToday > 0 && <span className="text-blue-400 ml-2">+{stats.users.newToday} dzis</span>}
+                            </p>
+                        )}
                     </div>
                 </div>
 
@@ -323,6 +354,23 @@ function DashboardPage() {
                             </div>
                         </div>
                     </div>
+
+                    {/* Statystyki czasu gry */}
+                    {stats?.playtime && (
+                        <div className="mt-4 p-4 bg-mc-darker rounded-lg">
+                            <h4 className="text-sm font-medium text-gray-300 mb-2">Czas gry graczy</h4>
+                            <div className="space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-500">Laczny czas gry:</span>
+                                    <span className="text-white">{stats.playtime.totalHours || 0}h</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-500">Sredni czas na gracza:</span>
+                                    <span className="text-white">{stats.playtime.averageHours || 0}h</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

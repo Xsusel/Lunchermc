@@ -43,6 +43,10 @@ function ConfigPage() {
     });
     const [savingServer, setSavingServer] = useState(false);
 
+    // Drag & Drop state
+    const [draggedServer, setDraggedServer] = useState(null);
+    const [dragOverServer, setDragOverServer] = useState(null);
+
     // Formularz konfiguracji
     const [form, setForm] = useState({
         game_version: '',
@@ -212,6 +216,60 @@ function ConfigPage() {
         }
     };
 
+    // === Drag & Drop ===
+
+    const handleDragStart = (e, server) => {
+        setDraggedServer(server);
+        e.dataTransfer.effectAllowed = 'move';
+        e.currentTarget.style.opacity = '0.5';
+    };
+
+    const handleDragEnd = (e) => {
+        e.currentTarget.style.opacity = '1';
+        setDraggedServer(null);
+        setDragOverServer(null);
+    };
+
+    const handleDragOver = (e, server) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (draggedServer && server.id !== draggedServer.id) {
+            setDragOverServer(server.id);
+        }
+    };
+
+    const handleDragLeave = () => {
+        setDragOverServer(null);
+    };
+
+    const handleDrop = async (e, targetServer) => {
+        e.preventDefault();
+        setDragOverServer(null);
+
+        if (!draggedServer || draggedServer.id === targetServer.id) return;
+
+        // Reorder locally first for instant feedback
+        const newServers = [...servers];
+        const dragIndex = newServers.findIndex(s => s.id === draggedServer.id);
+        const dropIndex = newServers.findIndex(s => s.id === targetServer.id);
+
+        const [removed] = newServers.splice(dragIndex, 1);
+        newServers.splice(dropIndex, 0, removed);
+        setServers(newServers);
+
+        // Send reorder to API
+        try {
+            const orderedIds = newServers.map(s => s.id);
+            await serversApi.reorder(orderedIds);
+            toast.success('Kolejność serwerów zaktualizowana');
+        } catch (error) {
+            toast.error('Błąd zmiany kolejności');
+            loadServers(); // Revert on error
+        }
+
+        setDraggedServer(null);
+    };
+
     if (loading) {
         return (
             <div className="flex items-center justify-center h-64">
@@ -292,15 +350,23 @@ function ConfigPage() {
                         {servers.map((server) => (
                             <div
                                 key={server.id}
+                                draggable
+                                onDragStart={(e) => handleDragStart(e, server)}
+                                onDragEnd={handleDragEnd}
+                                onDragOver={(e) => handleDragOver(e, server)}
+                                onDragLeave={handleDragLeave}
+                                onDrop={(e) => handleDrop(e, server)}
                                 className={`flex items-center gap-4 p-4 rounded-lg border transition-colors ${
-                                    server.is_enabled
-                                        ? server.is_default
-                                            ? 'border-mc-accent bg-mc-accent/5'
-                                            : 'border-mc-gray bg-mc-darker'
-                                        : 'border-mc-gray bg-mc-darker opacity-50'
+                                    dragOverServer === server.id
+                                        ? 'border-mc-accent border-dashed bg-mc-accent/10'
+                                        : server.is_enabled
+                                            ? server.is_default
+                                                ? 'border-mc-accent bg-mc-accent/5'
+                                                : 'border-mc-gray bg-mc-darker'
+                                            : 'border-mc-gray bg-mc-darker opacity-50'
                                 }`}
                             >
-                                <GripVertical className="w-5 h-5 text-gray-600 cursor-grab flex-shrink-0" />
+                                <GripVertical className="w-5 h-5 text-gray-600 cursor-grab flex-shrink-0 hover:text-gray-400" />
 
                                 <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2">

@@ -3,7 +3,8 @@
  * Obsługuje weryfikację tokenów JWT
  */
 import jwt from 'jsonwebtoken';
-import { User, Admin } from '../models/index.js';
+import { User, Admin, ActivityLog } from '../models/index.js';
+import { getClientIp } from '../utils/helpers.js';
 
 /**
  * Middleware weryfikujący token użytkownika (gracza)
@@ -44,6 +45,22 @@ export const authenticateUser = (req, res, next) => {
                 error: 'Konto zostało zablokowane',
                 reason: user.ban_reason
             });
+        }
+
+        // Opcjonalnie sprawdzamy IP binding
+        if (decoded.ip) {
+            const clientIp = getClientIp(req);
+            if (clientIp !== decoded.ip) {
+                ActivityLog.logSecurityEvent('ip_mismatch', clientIp, {
+                    userId: decoded.id,
+                    expectedIp: decoded.ip,
+                    actualIp: clientIp
+                });
+                return res.status(401).json({
+                    success: false,
+                    error: 'Sesja wygasła - zmiana adresu IP'
+                });
+            }
         }
 
         req.user = user;
@@ -100,6 +117,22 @@ export const authenticateAdmin = (req, res, next) => {
                 success: false,
                 error: 'Administrator nie istnieje'
             });
+        }
+
+        // Opcjonalnie sprawdzamy IP binding
+        if (decoded.ip) {
+            const clientIp = getClientIp(req);
+            if (clientIp !== decoded.ip) {
+                ActivityLog.logSecurityEvent('ip_mismatch', clientIp, {
+                    adminId: decoded.id,
+                    expectedIp: decoded.ip,
+                    actualIp: clientIp
+                });
+                return res.status(401).json({
+                    success: false,
+                    error: 'Sesja wygasła - zmiana adresu IP'
+                });
+            }
         }
 
         req.admin = admin;
@@ -164,33 +197,31 @@ export const optionalAuth = (req, res, next) => {
 /**
  * Generuje token JWT dla użytkownika
  * @param {object} user - Obiekt użytkownika
+ * @param {string|null} ip - Adres IP klienta (opcjonalny, dla session-IP binding)
  * @returns {string} Token JWT
  */
-export const generateUserToken = (user) => {
-    return jwt.sign(
-        {
-            id: user.id,
-            username: user.username,
-            type: 'user'
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
+export const generateUserToken = (user, ip = null) => {
+    const payload = {
+        id: user.id,
+        username: user.username,
+        type: 'user'
+    };
+    if (ip) payload.ip = ip;
+    return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
 };
 
 /**
  * Generuje token JWT dla administratora
  * @param {object} admin - Obiekt administratora
+ * @param {string|null} ip - Adres IP klienta (opcjonalny, dla session-IP binding)
  * @returns {string} Token JWT
  */
-export const generateAdminToken = (admin) => {
-    return jwt.sign(
-        {
-            id: admin.id,
-            username: admin.username,
-            type: 'admin'
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
+export const generateAdminToken = (admin, ip = null) => {
+    const payload = {
+        id: admin.id,
+        username: admin.username,
+        type: 'admin'
+    };
+    if (ip) payload.ip = ip;
+    return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
 };

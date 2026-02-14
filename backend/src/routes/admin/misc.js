@@ -1,113 +1,19 @@
 /**
- * Trasy panelu administracyjnego
- * Wymaga autoryzacji administratora
+ * Pozostałe trasy admina
+ * dashboard, me, 2FA management, launcher-versions, stats,
+ * maintenance-schedule, sessions, bans, appeals, rules, news, skins
  */
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
 import {
-    User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion, PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules, News, Server
-} from '../models/index.js';
-import { authenticateAdmin, generateAdminToken, adminLimiter, authLimiter, rateLimitAdmin } from '../middleware/index.js';
-import { asyncHandler } from '../middleware/errorHandler.js';
-import {
-    calculateSHA256, sanitizeFilename, isAllowedModFile,
-    getModsPath, ensureDir, getClientIp, formatFileSize, verifyFileSHA256
-} from '../utils/helpers.js';
-import {
-    createBackup, listBackups, restoreBackup, deleteBackup, getBackupStats
-} from '../utils/backup.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+    User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion,
+    PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules, News, Skin
+} from '../../models/index.js';
+import { authenticateAdmin } from '../../middleware/index.js';
+import { asyncHandler } from '../../middleware/errorHandler.js';
+import { getClientIp } from '../../utils/helpers.js';
 
 const router = Router();
-
-// Konfiguracja multer dla uploadu plików
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const modsPath = getModsPath();
-        ensureDir(modsPath);
-        cb(null, modsPath);
-    },
-    filename: (req, file, cb) => {
-        const safeName = sanitizeFilename(file.originalname);
-        cb(null, safeName);
-    }
-});
-
-const upload = multer({
-    storage,
-    limits: {
-        fileSize: (parseInt(process.env.MAX_FILE_SIZE_MB) || 100) * 1024 * 1024 // Domyślnie 100MB
-    },
-    fileFilter: (req, file, cb) => {
-        if (isAllowedModFile(file.originalname)) {
-            cb(null, true);
-        } else {
-            cb(new Error('Dozwolone są tylko pliki .jar i .zip'), false);
-        }
-    }
-});
-
-// ============================================
-// AUTORYZACJA ADMINA
-// ============================================
-
-/**
- * POST /api/admin/login
- * Logowanie administratora
- */
-router.post('/login',
-    authLimiter,
-    [
-        body('username').trim().notEmpty().withMessage('Nazwa użytkownika jest wymagana'),
-        body('password').notEmpty().withMessage('Hasło jest wymagane')
-    ],
-    asyncHandler(async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                error: 'Błąd walidacji',
-                details: errors.array()
-            });
-        }
-
-        const { username, password } = req.body;
-        const admin = Admin.verifyPassword(username, password);
-
-        if (!admin) {
-            return res.status(401).json({
-                success: false,
-                error: 'Nieprawidłowe dane logowania'
-            });
-        }
-
-        // Logujemy akcję
-        ActivityLog.logAdminAction('login', { admin: username }, getClientIp(req));
-
-        const token = generateAdminToken(admin);
-
-        res.json({
-            success: true,
-            data: {
-                admin: {
-                    id: admin.id,
-                    username: admin.username
-                },
-                token
-            }
-        });
-    })
-);
-
-// Wszystkie poniższe trasy wymagają autoryzacji admina
-router.use(adminLimiter);
-router.use(authenticateAdmin);
 
 // ============================================
 // INFORMACJE O ADMINIE
@@ -123,6 +29,169 @@ router.get('/me', asyncHandler(async (req, res) => {
         data: {
             id: req.admin.id,
             username: req.admin.username
+        }
+    });
+}));
+
+// ============================================
+// ZARZĄDZANIE 2FA
+// ============================================
+
+/**
+ * POST /api/admin/2fa/setup
+ * Rozpoczyna konfigurację 2FA - generuje sekret i URI
+ */
+router.post('/2fa/setup', asyncHandler(async (req, res) => {
+    const adminId = req.admin.id;
+
+    if (Admin.is2FAEnabled(adminId)) {
+        return res.status(400).json({
+            success: false,
+            error: '2FA jest już włączone. Wyłącz je najpierw, aby skonfigurować ponownie.'
+        });
+    }
+
+    const { secret, otpauthUri } = Admin.enable2FA(adminId);
+
+    res.json({
+        success: true,
+        data: {
+            secret,
+            otpauthUri
+        }
+    });
+}));
+
+/**
+ * POST /api/admin/2fa/verify-setup
+ * Weryfikuje kod TOTP podczas konfiguracji i włącza 2FA
+ */
+router.post('/2fa/verify-setup',
+    [body('token').trim().notEmpty().withMessage('Kod 2FA jest wymagany')],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const adminId = req.admin.id;
+        const { token } = req.body;
+
+        // Weryfikujemy kod TOTP
+        const isValid = Admin.verify2FA(adminId, token);
+        if (!isValid) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nieprawidłowy kod 2FA. Sprawdź czy czas na urządzeniu jest zsynchronizowany.'
+            });
+        }
+
+        // Włączamy 2FA
+        Admin.confirm2FA(adminId);
+
+        // Generujemy kody zapasowe
+        const backupCodes = Admin.generateBackupCodes(adminId);
+
+        ActivityLog.logAdminAction('2fa_enabled', { admin: req.admin.username }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: '2FA zostało włączone pomyślnie',
+            data: {
+                backupCodes
+            }
+        });
+    })
+);
+
+/**
+ * POST /api/admin/2fa/disable
+ * Wyłącza 2FA (wymaga aktualnego kodu TOTP)
+ */
+router.post('/2fa/disable',
+    [body('token').trim().notEmpty().withMessage('Kod 2FA jest wymagany')],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const adminId = req.admin.id;
+        const { token } = req.body;
+
+        if (!Admin.is2FAEnabled(adminId)) {
+            return res.status(400).json({
+                success: false,
+                error: '2FA nie jest włączone'
+            });
+        }
+
+        // Weryfikujemy kod TOTP
+        const isValid = Admin.verify2FA(adminId, token);
+        if (!isValid) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nieprawidłowy kod 2FA'
+            });
+        }
+
+        Admin.disable2FA(adminId);
+
+        ActivityLog.logAdminAction('2fa_disabled', { admin: req.admin.username }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: '2FA zostało wyłączone'
+        });
+    })
+);
+
+/**
+ * POST /api/admin/2fa/backup-codes
+ * Generuje nowe kody zapasowe
+ */
+router.post('/2fa/backup-codes', asyncHandler(async (req, res) => {
+    const adminId = req.admin.id;
+
+    if (!Admin.is2FAEnabled(adminId)) {
+        return res.status(400).json({
+            success: false,
+            error: '2FA nie jest włączone'
+        });
+    }
+
+    const backupCodes = Admin.generateBackupCodes(adminId);
+
+    ActivityLog.logAdminAction('2fa_backup_codes_regenerated', { admin: req.admin.username }, getClientIp(req));
+
+    res.json({
+        success: true,
+        data: {
+            backupCodes
+        }
+    });
+}));
+
+/**
+ * GET /api/admin/2fa/status
+ * Sprawdza status 2FA dla aktualnego admina
+ */
+router.get('/2fa/status', asyncHandler(async (req, res) => {
+    const adminId = req.admin.id;
+    const enabled = Admin.is2FAEnabled(adminId);
+
+    res.json({
+        success: true,
+        data: {
+            enabled
         }
     });
 }));
@@ -159,575 +228,6 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
             },
             recentActivity
         }
-    });
-}));
-
-// ============================================
-// ZARZĄDZANIE UŻYTKOWNIKAMI
-// ============================================
-
-/**
- * GET /api/admin/users
- * Lista użytkowników
- */
-router.get('/users', asyncHandler(async (req, res) => {
-    const limit = parseInt(req.query.limit) || 50;
-    const offset = parseInt(req.query.offset) || 0;
-
-    const users = User.getAll(limit, offset);
-    const total = User.count();
-
-    res.json({
-        success: true,
-        data: {
-            users,
-            pagination: {
-                total,
-                limit,
-                offset,
-                hasMore: offset + limit < total
-            }
-        }
-    });
-}));
-
-/**
- * GET /api/admin/users/:id
- * Szczegóły użytkownika
- */
-router.get('/users/:id', asyncHandler(async (req, res) => {
-    const user = User.findById(parseInt(req.params.id));
-
-    if (!user) {
-        return res.status(404).json({
-            success: false,
-            error: 'Użytkownik nie istnieje'
-        });
-    }
-
-    const activity = ActivityLog.getByUser(user.id, 20);
-
-    res.json({
-        success: true,
-        data: {
-            user,
-            activity
-        }
-    });
-}));
-
-/**
- * POST /api/admin/users/:id/ban
- * Banuje użytkownika
- */
-router.post('/users/:id/ban',
-    [body('reason').optional().isString()],
-    asyncHandler(async (req, res) => {
-        const userId = parseInt(req.params.id);
-        const { reason } = req.body;
-
-        const user = User.findById(userId);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                error: 'Użytkownik nie istnieje'
-            });
-        }
-
-        User.ban(userId, reason || '');
-
-        ActivityLog.logAdminAction('user_ban', {
-            userId,
-            username: user.username,
-            reason
-        }, getClientIp(req));
-
-        res.json({
-            success: true,
-            message: `Użytkownik ${user.username} został zbanowany`
-        });
-    })
-);
-
-/**
- * POST /api/admin/users/:id/unban
- * Odbanowuje użytkownika
- */
-router.post('/users/:id/unban', asyncHandler(async (req, res) => {
-    const userId = parseInt(req.params.id);
-
-    const user = User.findById(userId);
-    if (!user) {
-        return res.status(404).json({
-            success: false,
-            error: 'Użytkownik nie istnieje'
-        });
-    }
-
-    User.unban(userId);
-
-    ActivityLog.logAdminAction('user_unban', {
-        userId,
-        username: user.username
-    }, getClientIp(req));
-
-    res.json({
-        success: true,
-        message: `Użytkownik ${user.username} został odbanowany`
-    });
-}));
-
-/**
- * DELETE /api/admin/users/:id
- * Usuwa użytkownika
- */
-router.delete('/users/:id', asyncHandler(async (req, res) => {
-    const userId = parseInt(req.params.id);
-
-    const user = User.findById(userId);
-    if (!user) {
-        return res.status(404).json({
-            success: false,
-            error: 'Użytkownik nie istnieje'
-        });
-    }
-
-    User.delete(userId);
-
-    ActivityLog.logAdminAction('user_delete', {
-        userId,
-        username: user.username
-    }, getClientIp(req));
-
-    res.json({
-        success: true,
-        message: 'Użytkownik został usunięty'
-    });
-}));
-
-// ============================================
-// KONFIGURACJA GRY
-// ============================================
-
-/**
- * GET /api/admin/config
- * Pobiera konfigurację gry
- */
-router.get('/config', asyncHandler(async (req, res) => {
-    const config = GameConfig.get();
-
-    res.json({
-        success: true,
-        data: config
-    });
-}));
-
-/**
- * PUT /api/admin/config
- * Aktualizuje konfigurację gry
- */
-router.put('/config',
-    [
-        body('game_version').optional().matches(/^\d+\.\d+(\.\d+)?$/),
-        body('loader_type').optional().isIn(['vanilla', 'forge', 'fabric']),
-        body('server_ip').optional().isString(),
-        body('server_port').optional().isInt({ min: 1, max: 65535 }),
-        body('java_args').optional().isString()
-    ],
-    asyncHandler(async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                error: 'Błąd walidacji',
-                details: errors.array()
-            });
-        }
-
-        const config = GameConfig.update(req.body);
-
-        ActivityLog.logAdminAction('config_update', req.body, getClientIp(req));
-
-        res.json({
-            success: true,
-            message: 'Konfiguracja została zaktualizowana',
-            data: config
-        });
-    })
-);
-
-/**
- * POST /api/admin/config/maintenance
- * Włącza/wyłącza tryb konserwacji
- */
-router.post('/config/maintenance',
-    [
-        body('enabled').isBoolean(),
-        body('message').optional().isString()
-    ],
-    asyncHandler(async (req, res) => {
-        const { enabled, message } = req.body;
-
-        GameConfig.setMaintenanceMode(enabled, message);
-
-        ActivityLog.logAdminAction('maintenance_mode', { enabled, message }, getClientIp(req));
-
-        res.json({
-            success: true,
-            message: enabled ? 'Tryb konserwacji włączony' : 'Tryb konserwacji wyłączony'
-        });
-    })
-);
-
-// ============================================
-// ZARZĄDZANIE MODAMI
-// ============================================
-
-/**
- * GET /api/admin/mods
- * Lista wszystkich modów
- */
-router.get('/mods', asyncHandler(async (req, res) => {
-    const mods = Mod.getAll();
-
-    res.json({
-        success: true,
-        data: mods.map(mod => ({
-            ...mod,
-            fileSizeFormatted: formatFileSize(mod.file_size)
-        }))
-    });
-}));
-
-/**
- * POST /api/admin/mods
- * Dodaje nowy mod (przez upload pliku)
- */
-router.post('/mods',
-    upload.single('file'),
-    asyncHandler(async (req, res) => {
-        if (!req.file) {
-            return res.status(400).json({
-                success: false,
-                error: 'Nie przesłano pliku'
-            });
-        }
-
-        const { name, description, is_required, mod_type } = req.body;
-        const filePath = req.file.path;
-        const filename = req.file.filename;
-
-        // Obliczamy sumę kontrolną
-        const sha256 = await calculateSHA256(filePath);
-
-        // Sprawdzamy czy mod już istnieje
-        const existingMod = Mod.findByFilename(filename);
-        if (existingMod) {
-            // Usuwamy przesłany plik
-            fs.unlinkSync(filePath);
-            return res.status(409).json({
-                success: false,
-                error: 'Mod o tej nazwie już istnieje'
-            });
-        }
-
-        // Tworzymy wpis w bazie
-        const mod = Mod.create({
-            name: name || filename.replace(/\.[^.]+$/, ''),
-            filename,
-            url: `/api/download/mods/${filename}`,
-            sha256,
-            file_size: req.file.size,
-            is_required: is_required === 'true' || is_required === true,
-            mod_type: mod_type || 'mod',
-            description
-        });
-
-        ActivityLog.logAdminAction('mod_upload', {
-            modId: mod.id,
-            filename
-        }, getClientIp(req));
-
-        res.status(201).json({
-            success: true,
-            message: 'Mod został dodany',
-            data: mod
-        });
-    })
-);
-
-/**
- * POST /api/admin/mods/url
- * Dodaje mod przez URL (zewnętrzny link)
- */
-router.post('/mods/url',
-    [
-        body('name').trim().notEmpty().withMessage('Nazwa jest wymagana'),
-        body('filename').trim().notEmpty().withMessage('Nazwa pliku jest wymagana'),
-        body('url').isURL().withMessage('Nieprawidłowy URL'),
-        body('sha256').isLength({ min: 64, max: 64 }).withMessage('Nieprawidłowa suma SHA256')
-    ],
-    asyncHandler(async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                error: 'Błąd walidacji',
-                details: errors.array()
-            });
-        }
-
-        const { name, filename, url, sha256, file_size, is_required, mod_type, description } = req.body;
-
-        // Sprawdzamy czy mod już istnieje
-        if (Mod.findByFilename(filename)) {
-            return res.status(409).json({
-                success: false,
-                error: 'Mod o tej nazwie już istnieje'
-            });
-        }
-
-        const mod = Mod.create({
-            name,
-            filename,
-            url,
-            sha256,
-            file_size: file_size || 0,
-            is_required: is_required !== false,
-            mod_type: mod_type || 'mod',
-            description
-        });
-
-        ActivityLog.logAdminAction('mod_add_url', {
-            modId: mod.id,
-            filename,
-            url
-        }, getClientIp(req));
-
-        res.status(201).json({
-            success: true,
-            message: 'Mod został dodany',
-            data: mod
-        });
-    })
-);
-
-/**
- * PUT /api/admin/mods/:id
- * Aktualizuje mod
- */
-router.put('/mods/:id', asyncHandler(async (req, res) => {
-    const modId = parseInt(req.params.id);
-    const mod = Mod.findById(modId);
-
-    if (!mod) {
-        return res.status(404).json({
-            success: false,
-            error: 'Mod nie istnieje'
-        });
-    }
-
-    const updated = Mod.update(modId, req.body);
-
-    ActivityLog.logAdminAction('mod_update', {
-        modId,
-        changes: req.body
-    }, getClientIp(req));
-
-    res.json({
-        success: true,
-        message: 'Mod został zaktualizowany',
-        data: updated
-    });
-}));
-
-/**
- * POST /api/admin/mods/:id/toggle
- * Włącza/wyłącza mod
- */
-router.post('/mods/:id/toggle', asyncHandler(async (req, res) => {
-    const modId = parseInt(req.params.id);
-    const mod = Mod.findById(modId);
-
-    if (!mod) {
-        return res.status(404).json({
-            success: false,
-            error: 'Mod nie istnieje'
-        });
-    }
-
-    const newState = !mod.is_enabled;
-    Mod.setEnabled(modId, newState);
-
-    ActivityLog.logAdminAction('mod_toggle', {
-        modId,
-        enabled: newState
-    }, getClientIp(req));
-
-    res.json({
-        success: true,
-        message: newState ? 'Mod został włączony' : 'Mod został wyłączony',
-        data: { enabled: newState }
-    });
-}));
-
-/**
- * DELETE /api/admin/mods/:id
- * Usuwa mod
- */
-router.delete('/mods/:id', asyncHandler(async (req, res) => {
-    const modId = parseInt(req.params.id);
-    const mod = Mod.findById(modId);
-
-    if (!mod) {
-        return res.status(404).json({
-            success: false,
-            error: 'Mod nie istnieje'
-        });
-    }
-
-    // Usuwamy plik jeśli jest lokalny
-    if (mod.url && mod.url.startsWith('/api/download/mods/')) {
-        const filePath = path.join(getModsPath(), mod.filename);
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
-    }
-
-    Mod.delete(modId);
-
-    ActivityLog.logAdminAction('mod_delete', {
-        modId,
-        filename: mod.filename
-    }, getClientIp(req));
-
-    res.json({
-        success: true,
-        message: 'Mod został usunięty'
-    });
-}));
-
-// ============================================
-// POWIADOMIENIA (BROADCAST)
-// ============================================
-
-/**
- * GET /api/admin/broadcasts
- * Lista wszystkich powiadomień
- */
-router.get('/broadcasts', asyncHandler(async (req, res) => {
-    const broadcasts = Broadcast.getAll();
-
-    res.json({
-        success: true,
-        data: broadcasts
-    });
-}));
-
-/**
- * POST /api/admin/broadcasts
- * Tworzy nowe powiadomienie
- */
-router.post('/broadcasts',
-    [
-        body('title').trim().notEmpty().withMessage('Tytuł jest wymagany'),
-        body('message').trim().notEmpty().withMessage('Treść jest wymagana'),
-        body('type').optional().isIn(['info', 'warning', 'error', 'success']),
-        body('expires_at').optional().isISO8601()
-    ],
-    asyncHandler(async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                error: 'Błąd walidacji',
-                details: errors.array()
-            });
-        }
-
-        const broadcast = Broadcast.create(req.body);
-
-        ActivityLog.logAdminAction('broadcast_create', {
-            broadcastId: broadcast.id,
-            title: broadcast.title
-        }, getClientIp(req));
-
-        res.status(201).json({
-            success: true,
-            message: 'Powiadomienie zostało utworzone',
-            data: broadcast
-        });
-    })
-);
-
-/**
- * PUT /api/admin/broadcasts/:id
- * Aktualizuje powiadomienie
- */
-router.put('/broadcasts/:id', asyncHandler(async (req, res) => {
-    const broadcastId = parseInt(req.params.id);
-    const broadcast = Broadcast.findById(broadcastId);
-
-    if (!broadcast) {
-        return res.status(404).json({
-            success: false,
-            error: 'Powiadomienie nie istnieje'
-        });
-    }
-
-    const updated = Broadcast.update(broadcastId, req.body);
-
-    res.json({
-        success: true,
-        message: 'Powiadomienie zostało zaktualizowane',
-        data: updated
-    });
-}));
-
-/**
- * POST /api/admin/broadcasts/:id/toggle
- * Włącza/wyłącza powiadomienie
- */
-router.post('/broadcasts/:id/toggle', asyncHandler(async (req, res) => {
-    const broadcastId = parseInt(req.params.id);
-    const broadcast = Broadcast.findById(broadcastId);
-
-    if (!broadcast) {
-        return res.status(404).json({
-            success: false,
-            error: 'Powiadomienie nie istnieje'
-        });
-    }
-
-    const newState = !broadcast.is_active;
-    Broadcast.setActive(broadcastId, newState);
-
-    res.json({
-        success: true,
-        message: newState ? 'Powiadomienie aktywowane' : 'Powiadomienie dezaktywowane',
-        data: { active: newState }
-    });
-}));
-
-/**
- * DELETE /api/admin/broadcasts/:id
- * Usuwa powiadomienie
- */
-router.delete('/broadcasts/:id', asyncHandler(async (req, res) => {
-    const broadcastId = parseInt(req.params.id);
-
-    if (!Broadcast.findById(broadcastId)) {
-        return res.status(404).json({
-            success: false,
-            error: 'Powiadomienie nie istnieje'
-        });
-    }
-
-    Broadcast.delete(broadcastId);
-
-    res.json({
-        success: true,
-        message: 'Powiadomienie zostało usunięte'
     });
 }));
 
@@ -803,435 +303,6 @@ router.delete('/launcher-versions/:id', asyncHandler(async (req, res) => {
         message: 'Wersja została usunięta'
     });
 }));
-
-// ============================================
-// LOGI AKTYWNOŚCI (ROZSZERZONE)
-// ============================================
-
-/**
- * GET /api/admin/logs
- * Lista logów aktywności z zaawansowanym filtrowaniem
- */
-router.get('/logs', asyncHandler(async (req, res) => {
-    const options = {
-        limit: parseInt(req.query.limit) || 100,
-        offset: parseInt(req.query.offset) || 0,
-        action: req.query.action || null,
-        category: req.query.category || null,
-        severity: req.query.severity || null,
-        userId: req.query.userId ? parseInt(req.query.userId) : null,
-        adminId: req.query.adminId ? parseInt(req.query.adminId) : null,
-        resourceType: req.query.resourceType || null,
-        resourceId: req.query.resourceId || null,
-        ipAddress: req.query.ipAddress || null,
-        startDate: req.query.startDate || null,
-        endDate: req.query.endDate || null,
-        search: req.query.search || null
-    };
-
-    const result = ActivityLog.getAll(options);
-
-    res.json({
-        success: true,
-        data: result.logs,
-        pagination: {
-            total: result.total,
-            page: result.page,
-            pages: result.pages,
-            limit: result.limit
-        }
-    });
-}));
-
-/**
- * GET /api/admin/logs/categories
- * Lista dostępnych kategorii i severity levels
- */
-router.get('/logs/categories', asyncHandler(async (req, res) => {
-    res.json({
-        success: true,
-        data: {
-            categories: ActivityLog.Categories,
-            severityLevels: ActivityLog.Severity,
-            resourceTypes: ActivityLog.ResourceTypes
-        }
-    });
-}));
-
-/**
- * GET /api/admin/logs/stats
- * Rozszerzone statystyki logów
- */
-router.get('/logs/stats', asyncHandler(async (req, res) => {
-    const days = parseInt(req.query.days) || 7;
-    const stats = ActivityLog.getExtendedStats(days);
-
-    res.json({
-        success: true,
-        data: stats
-    });
-}));
-
-/**
- * GET /api/admin/logs/security
- * Logi security (warning+ severity)
- */
-router.get('/logs/security', asyncHandler(async (req, res) => {
-    const limit = parseInt(req.query.limit) || 100;
-    const logs = ActivityLog.getSecurityLogs(limit);
-
-    res.json({
-        success: true,
-        data: logs
-    });
-}));
-
-/**
- * GET /api/admin/logs/suspicious
- * Podejrzane logowania (wiele nieudanych prób z tego samego IP)
- */
-router.get('/logs/suspicious', asyncHandler(async (req, res) => {
-    const threshold = parseInt(req.query.threshold) || 5;
-    const hoursBack = parseInt(req.query.hours) || 24;
-    const suspicious = ActivityLog.getSuspiciousLogins(threshold, hoursBack);
-
-    res.json({
-        success: true,
-        data: suspicious
-    });
-}));
-
-/**
- * GET /api/admin/logs/by-user/:userId
- * Logi konkretnego użytkownika
- */
-router.get('/logs/by-user/:userId', asyncHandler(async (req, res) => {
-    const userId = parseInt(req.params.userId);
-    const limit = parseInt(req.query.limit) || 50;
-    const logs = ActivityLog.getByUser(userId, limit);
-
-    res.json({
-        success: true,
-        data: logs
-    });
-}));
-
-/**
- * GET /api/admin/logs/by-resource/:resourceType/:resourceId
- * Logi dla konkretnego zasobu
- */
-router.get('/logs/by-resource/:resourceType/:resourceId', asyncHandler(async (req, res) => {
-    const { resourceType, resourceId } = req.params;
-    const limit = parseInt(req.query.limit) || 50;
-    const logs = ActivityLog.getByResource(resourceType, resourceId, limit);
-
-    res.json({
-        success: true,
-        data: logs
-    });
-}));
-
-/**
- * GET /api/admin/logs/export
- * Eksport logów do CSV
- */
-router.get('/logs/export', asyncHandler(async (req, res) => {
-    const options = {
-        action: req.query.action || null,
-        category: req.query.category || null,
-        severity: req.query.severity || null,
-        startDate: req.query.startDate || null,
-        endDate: req.query.endDate || null
-    };
-
-    const csv = ActivityLog.exportToCsv(options);
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=logs_${new Date().toISOString().split('T')[0]}.csv`);
-    res.send(csv);
-}));
-
-/**
- * GET /api/admin/logs/summary
- * Podsumowanie logów dla okresu
- */
-router.get('/logs/summary', asyncHandler(async (req, res) => {
-    const startDate = req.query.startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const endDate = req.query.endDate || new Date().toISOString();
-
-    const summary = ActivityLog.getSummary(startDate, endDate);
-
-    res.json({
-        success: true,
-        data: summary
-    });
-}));
-
-/**
- * DELETE /api/admin/logs/cleanup
- * Czyści stare logi
- */
-router.delete('/logs/cleanup', asyncHandler(async (req, res) => {
-    const days = parseInt(req.query.days) || 30;
-    const deleted = ActivityLog.deleteOlderThan(days);
-
-    ActivityLog.logAdminAction('logs_cleanup', { days, deleted }, getClientIp(req));
-
-    res.json({
-        success: true,
-        message: `Usunięto ${deleted} logów starszych niż ${days} dni`
-    });
-}));
-
-/**
- * GET /api/admin/logs/:id
- * Szczegóły pojedynczego logu
- */
-router.get('/logs/:id', asyncHandler(async (req, res) => {
-    const id = parseInt(req.params.id);
-    const log = ActivityLog.findById(id);
-
-    if (!log) {
-        return res.status(404).json({
-            success: false,
-            error: 'Log nie znaleziony'
-        });
-    }
-
-    res.json({
-        success: true,
-        data: log
-    });
-}));
-
-/**
- * POST /api/admin/mods/sync
- * Synchronizuje listę modów z plikami na dysku
- */
-router.post('/mods/sync', asyncHandler(async (req, res) => {
-    const modsPath = getModsPath();
-    ensureDir(modsPath);
-
-    const filesOnDisk = fs.readdirSync(modsPath).filter(f =>
-        f.endsWith('.jar') || f.endsWith('.zip')
-    );
-
-    const modsInDb = Mod.getAll();
-    const dbFilenames = new Set(modsInDb.map(m => m.filename));
-    const diskFilenames = new Set(filesOnDisk);
-
-    const results = { added: 0, removed: 0 };
-
-    // 1. Dodaj nowe pliki
-    for (const filename of filesOnDisk) {
-        if (!dbFilenames.has(filename)) {
-            const filePath = path.join(modsPath, filename);
-            const sha256 = await calculateSHA256(filePath);
-            const stats = fs.statSync(filePath);
-
-            Mod.create({
-                name: filename.replace(/\.[^.]+$/, ''),
-                filename,
-                url: `/api/download/mods/${filename}`,
-                sha256,
-                file_size: stats.size,
-                is_required: true,
-                mod_type: 'mod',
-                description: 'Zsynchornizowano automatycznie'
-            });
-            results.added++;
-        }
-    }
-
-    // 2. Usuń nieistniejące pliki z bazy (tylko te lokalne)
-    for (const mod of modsInDb) {
-        if (mod.url && mod.url.startsWith('/api/download/mods/') && !diskFilenames.has(mod.filename)) {
-            Mod.delete(mod.id);
-            results.removed++;
-        }
-    }
-
-    ActivityLog.logAdminAction('mods_sync', results, getClientIp(req));
-
-    res.json({
-        success: true,
-        message: `Synchronizacja zakończona: Dodano ${results.added}, usunięto ${results.removed}`,
-        data: results
-    });
-}));
-
-/**
- * POST /api/admin/mods/verify
- * Weryfikuje integralność wszystkich modów na serwerze
- * Porównuje pliki z sumami SHA256 w bazie danych
- */
-router.post('/mods/verify',
-    authenticateAdmin,
-    asyncHandler(async (req, res) => {
-        const modsPath = getModsPath();
-        const modsInDb = Mod.getAll();
-
-        const results = {
-            verified: [],      // Pliki z poprawnymi checksumami
-            corrupted: [],     // Pliki z nieprawidłowymi checksumami
-            missing: [],       // Pliki w bazie ale nie na dysku
-            orphaned: [],      // Pliki na dysku ale nie w bazie
-            errors: []         // Błędy weryfikacji
-        };
-
-        // Pobierz pliki na dysku
-        let filesOnDisk = [];
-        if (fs.existsSync(modsPath)) {
-            filesOnDisk = fs.readdirSync(modsPath)
-                .filter(f => isAllowedModFile(f));
-        }
-        const diskFilenames = new Set(filesOnDisk);
-
-        // Weryfikuj każdy mod z bazy
-        for (const mod of modsInDb) {
-            const filePath = path.join(modsPath, mod.filename);
-
-            // Tylko lokalne pliki (nie zewnętrzne URL)
-            if (mod.url && !mod.url.startsWith('/api/download/mods/')) {
-                // Pomiń zewnętrzne mody - nie możemy ich weryfikować
-                continue;
-            }
-
-            const verification = await verifyFileSHA256(filePath, mod.sha256);
-
-            if (verification.error === 'file_not_found') {
-                results.missing.push({
-                    id: mod.id,
-                    filename: mod.filename,
-                    expectedSha256: mod.sha256
-                });
-            } else if (!verification.valid) {
-                results.corrupted.push({
-                    id: mod.id,
-                    filename: mod.filename,
-                    expectedSha256: mod.sha256,
-                    actualSha256: verification.actual
-                });
-            } else {
-                results.verified.push({
-                    id: mod.id,
-                    filename: mod.filename,
-                    sha256: mod.sha256
-                });
-            }
-
-            // Usuń z listy dyskowej
-            diskFilenames.delete(mod.filename);
-        }
-
-        // Pozostałe pliki na dysku to "orphaned" (nie w bazie)
-        for (const filename of diskFilenames) {
-            const filePath = path.join(modsPath, filename);
-            try {
-                const sha256 = await calculateSHA256(filePath);
-                const stats = fs.statSync(filePath);
-                results.orphaned.push({
-                    filename,
-                    sha256,
-                    size: stats.size
-                });
-            } catch (error) {
-                results.errors.push({
-                    filename,
-                    error: error.message
-                });
-            }
-        }
-
-        // Loguj akcję
-        ActivityLog.logAdminAction('mods_verify', {
-            verified: results.verified.length,
-            corrupted: results.corrupted.length,
-            missing: results.missing.length,
-            orphaned: results.orphaned.length
-        }, getClientIp(req));
-
-        res.json({
-            success: true,
-            message: `Weryfikacja zakończona: ${results.verified.length} OK, ${results.corrupted.length} uszkodzonych, ${results.missing.length} brakujących`,
-            data: results
-        });
-    })
-);
-
-/**
- * POST /api/admin/mods/:id/recalculate-sha256
- * Przelicza SHA256 dla konkretnego moda i aktualizuje w bazie
- */
-router.post('/mods/:id/recalculate-sha256',
-    authenticateAdmin,
-    [
-        param('id').isInt().withMessage('ID musi być liczbą całkowitą')
-    ],
-    asyncHandler(async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                error: 'Błąd walidacji',
-                details: errors.array()
-            });
-        }
-
-        const { id } = req.params;
-        const mod = Mod.findById(parseInt(id));
-
-        if (!mod) {
-            return res.status(404).json({
-                success: false,
-                error: 'Mod nie znaleziony'
-            });
-        }
-
-        const filePath = path.join(getModsPath(), mod.filename);
-
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({
-                success: false,
-                error: 'Plik moda nie istnieje na serwerze'
-            });
-        }
-
-        try {
-            const newSha256 = await calculateSHA256(filePath);
-            const stats = fs.statSync(filePath);
-
-            // Aktualizuj w bazie
-            Mod.update(parseInt(id), {
-                sha256: newSha256,
-                file_size: stats.size
-            });
-
-            ActivityLog.logAdminAction('mod_sha256_recalculate', {
-                modId: id,
-                filename: mod.filename,
-                oldSha256: mod.sha256,
-                newSha256
-            }, getClientIp(req));
-
-            res.json({
-                success: true,
-                message: 'SHA256 zaktualizowany',
-                data: {
-                    filename: mod.filename,
-                    oldSha256: mod.sha256,
-                    newSha256,
-                    size: stats.size
-                }
-            });
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                error: `Błąd przeliczania SHA256: ${error.message}`
-            });
-        }
-    })
-);
 
 // ============================================
 // STATYSTYKI GRACZY
@@ -1415,177 +486,6 @@ router.get('/stats/players/search',
         res.json({
             success: true,
             data: players
-        });
-    })
-);
-
-// ============================================
-// BACKUP BAZY DANYCH
-// ============================================
-
-/**
- * GET /api/admin/backups
- * Lista wszystkich backupów
- */
-router.get('/backups',
-    authenticateAdmin,
-    asyncHandler(async (req, res) => {
-        const backups = listBackups();
-        const stats = getBackupStats();
-
-        res.json({
-            success: true,
-            data: {
-                backups,
-                stats
-            }
-        });
-    })
-);
-
-/**
- * POST /api/admin/backups
- * Tworzy nowy backup
- */
-router.post('/backups',
-    authenticateAdmin,
-    [
-        body('description').optional().trim().isLength({ max: 255 })
-    ],
-    asyncHandler(async (req, res) => {
-        const { description } = req.body;
-
-        const result = await createBackup({
-            type: 'manual',
-            description: description || 'Ręczny backup z panelu admina'
-        });
-
-        if (result.success) {
-            ActivityLog.logAdminAction('backup_create', { filename: result.filename }, getClientIp(req));
-
-            res.json({
-                success: true,
-                message: 'Backup utworzony pomyślnie',
-                data: result
-            });
-        } else {
-            res.status(500).json({
-                success: false,
-                error: result.error || 'Nie udało się utworzyć backupu'
-            });
-        }
-    })
-);
-
-/**
- * POST /api/admin/backups/:filename/restore
- * Przywraca bazę danych z backupu
- */
-router.post('/backups/:filename/restore',
-    authenticateAdmin,
-    [
-        param('filename').trim().notEmpty().withMessage('Nazwa pliku jest wymagana')
-    ],
-    asyncHandler(async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                error: 'Błąd walidacji',
-                details: errors.array()
-            });
-        }
-
-        const { filename } = req.params;
-
-        // Zabezpieczenie przed path traversal
-        if (filename.includes('..') || filename.includes('/')) {
-            return res.status(400).json({
-                success: false,
-                error: 'Nieprawidłowa nazwa pliku'
-            });
-        }
-
-        const result = await restoreBackup(filename);
-
-        if (result.success) {
-            ActivityLog.logAdminAction('backup_restore', { filename }, getClientIp(req));
-
-            res.json({
-                success: true,
-                message: result.message,
-                data: {
-                    preRestoreBackup: result.preRestoreBackup
-                }
-            });
-        } else {
-            res.status(400).json({
-                success: false,
-                error: result.error
-            });
-        }
-    })
-);
-
-/**
- * DELETE /api/admin/backups/:filename
- * Usuwa backup
- */
-router.delete('/backups/:filename',
-    authenticateAdmin,
-    [
-        param('filename').trim().notEmpty().withMessage('Nazwa pliku jest wymagana')
-    ],
-    asyncHandler(async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                error: 'Błąd walidacji',
-                details: errors.array()
-            });
-        }
-
-        const { filename } = req.params;
-
-        // Zabezpieczenie przed path traversal
-        if (filename.includes('..') || filename.includes('/')) {
-            return res.status(400).json({
-                success: false,
-                error: 'Nieprawidłowa nazwa pliku'
-            });
-        }
-
-        const result = deleteBackup(filename);
-
-        if (result.success) {
-            ActivityLog.logAdminAction('backup_delete', { filename }, getClientIp(req));
-
-            res.json({
-                success: true,
-                message: 'Backup usunięty'
-            });
-        } else {
-            res.status(400).json({
-                success: false,
-                error: result.error
-            });
-        }
-    })
-);
-
-/**
- * GET /api/admin/backups/stats
- * Statystyki backupów
- */
-router.get('/backups/stats',
-    authenticateAdmin,
-    asyncHandler(async (req, res) => {
-        const stats = getBackupStats();
-
-        res.json({
-            success: true,
-            data: stats
         });
     })
 );
@@ -3235,69 +2135,42 @@ router.delete('/news/:id',
 );
 
 // ============================================
-// ZARZĄDZANIE SERWERAMI
+// ZARZĄDZANIE SKINAMI (ADMIN)
 // ============================================
 
 /**
- * GET /api/admin/servers
- * Pobiera listę wszystkich serwerów
+ * GET /api/admin/skins
+ * Lista wszystkich niestandardowych skinów
  */
-router.get('/servers', asyncHandler(async (req, res) => {
-    const servers = Server.getAll();
-    res.json({ success: true, data: servers });
-}));
-
-/**
- * POST /api/admin/servers
- * Dodaje nowy serwer
- */
-router.post('/servers',
-    [
-        body('name').trim().notEmpty().withMessage('Nazwa serwera jest wymagana'),
-        body('ip').trim().notEmpty().withMessage('Adres IP jest wymagany'),
-        body('port').optional().isInt({ min: 1, max: 65535 }),
-        body('description').optional().isString(),
-        body('is_default').optional().isBoolean()
-    ],
+router.get('/skins',
+    authenticateAdmin,
     asyncHandler(async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({
-                success: false,
-                error: 'Błąd walidacji',
-                details: errors.array()
-            });
-        }
+        const limit = parseInt(req.query.limit) || 50;
+        const offset = parseInt(req.query.offset) || 0;
 
-        const server = Server.create(req.body);
-
-        ActivityLog.logAdminAction('server_create', {
-            serverId: server.id,
-            name: server.name,
-            ip: server.ip
-        }, getClientIp(req));
+        const result = Skin.getAll(limit, offset);
 
         res.json({
             success: true,
-            message: 'Serwer został dodany',
-            data: server
+            data: result.skins,
+            pagination: {
+                total: result.total,
+                page: result.page,
+                pages: result.pages,
+                limit
+            }
         });
     })
 );
 
 /**
- * PUT /api/admin/servers/:id
- * Aktualizuje serwer
+ * DELETE /api/admin/skins/:userId
+ * Usuwa skin użytkownika (admin)
  */
-router.put('/servers/:id',
+router.delete('/skins/:userId',
+    authenticateAdmin,
     [
-        param('id').isInt(),
-        body('name').optional().trim().notEmpty(),
-        body('ip').optional().trim().notEmpty(),
-        body('port').optional().isInt({ min: 1, max: 65535 }),
-        body('description').optional().isString(),
-        body('is_default').optional().isBoolean(),
-        body('is_enabled').optional().isBoolean()
+        param('userId').isInt().withMessage('userId musi być liczbą całkowitą')
     ],
     asyncHandler(async (req, res) => {
         const errors = validationResult(req);
@@ -3309,105 +2182,33 @@ router.put('/servers/:id',
             });
         }
 
-        const id = parseInt(req.params.id);
-        const existing = Server.getById(id);
-        if (!existing) {
+        const userId = parseInt(req.params.userId);
+
+        const user = User.findById(userId);
+        if (!user) {
             return res.status(404).json({
                 success: false,
-                error: 'Serwer nie znaleziony'
+                error: 'Użytkownik nie istnieje'
             });
         }
 
-        const server = Server.update(id, req.body);
-
-        ActivityLog.logAdminAction('server_update', {
-            serverId: id,
-            name: server.name
-        }, getClientIp(req));
-
-        res.json({
-            success: true,
-            message: 'Serwer został zaktualizowany',
-            data: server
-        });
-    })
-);
-
-/**
- * DELETE /api/admin/servers/:id
- * Usuwa serwer
- */
-router.delete('/servers/:id',
-    [param('id').isInt()],
-    asyncHandler(async (req, res) => {
-        const id = parseInt(req.params.id);
-        const deleted = Server.delete(id);
+        const deleted = Skin.delete(userId);
 
         if (!deleted) {
             return res.status(404).json({
                 success: false,
-                error: 'Serwer nie znaleziony'
+                error: 'Użytkownik nie ma ustawionego skina'
             });
         }
 
-        ActivityLog.logAdminAction('server_delete', {
-            serverId: id,
-            name: deleted.name
+        ActivityLog.logAdminAction('skin_delete', {
+            userId,
+            username: user.username
         }, getClientIp(req));
 
         res.json({
             success: true,
-            message: 'Serwer został usunięty'
-        });
-    })
-);
-
-/**
- * POST /api/admin/servers/:id/toggle
- * Włącza/wyłącza serwer
- */
-router.post('/servers/:id/toggle',
-    [param('id').isInt()],
-    asyncHandler(async (req, res) => {
-        const id = parseInt(req.params.id);
-        const server = Server.toggle(id);
-
-        if (!server) {
-            return res.status(404).json({
-                success: false,
-                error: 'Serwer nie znaleziony'
-            });
-        }
-
-        ActivityLog.logAdminAction('server_toggle', {
-            serverId: id,
-            name: server.name,
-            enabled: !!server.is_enabled
-        }, getClientIp(req));
-
-        res.json({
-            success: true,
-            message: server.is_enabled ? 'Serwer włączony' : 'Serwer wyłączony',
-            data: server
-        });
-    })
-);
-
-/**
- * POST /api/admin/servers/reorder
- * Zmienia kolejność serwerów
- */
-router.post('/servers/reorder',
-    [body('ids').isArray()],
-    asyncHandler(async (req, res) => {
-        const { ids } = req.body;
-        Server.reorder(ids);
-
-        ActivityLog.logAdminAction('server_reorder', { ids }, getClientIp(req));
-
-        res.json({
-            success: true,
-            message: 'Kolejność serwerów zaktualizowana'
+            message: `Skin użytkownika ${user.username} został usunięty`
         });
     })
 );
