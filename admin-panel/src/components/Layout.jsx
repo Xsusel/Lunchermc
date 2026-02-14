@@ -18,7 +18,8 @@ import {
     Download,
     ScrollText,
     Newspaper,
-    Shirt
+    Shirt,
+    Box
 } from 'lucide-react';
 
 // Elementy nawigacji
@@ -26,6 +27,7 @@ const navItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/users', label: 'Użytkownicy', icon: Users },
     { path: '/mods', label: 'Mody', icon: Package },
+    { path: '/curseforge', label: 'CurseForge', icon: Box },
     { path: '/config', label: 'Konfiguracja', icon: Settings },
     { path: '/broadcasts', label: 'Powiadomienia', icon: Bell },
     { path: '/rules', label: 'Regulamin', icon: ScrollText },

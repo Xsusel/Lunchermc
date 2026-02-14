@@ -221,6 +221,20 @@ const migrations = [
             ALTER TABLE launcher_versions ADD COLUMN filename TEXT;
         `,
     },
+
+    // ------------------------------------------------------------------
+    // 14. mods CurseForge integration columns
+    // ------------------------------------------------------------------
+    {
+        id: 14,
+        name: 'add_mods_curseforge_columns',
+        sql: `
+            ALTER TABLE mods ADD COLUMN curseforge_id INTEGER;
+            ALTER TABLE mods ADD COLUMN curseforge_file_id INTEGER;
+            ALTER TABLE mods ADD COLUMN curseforge_url TEXT;
+            CREATE INDEX IF NOT EXISTS idx_mods_curseforge ON mods(curseforge_id);
+        `,
+    },
 ];
 
 // ============================================

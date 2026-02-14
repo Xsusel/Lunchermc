@@ -23,6 +23,7 @@ const LauncherVersionsPage = lazy(() => import('./pages/LauncherVersionsPage'));
 const RulesPage = lazy(() => import('./pages/RulesPage'));
 const NewsPage = lazy(() => import('./pages/NewsPage'));
 const SkinsPage = lazy(() => import('./pages/SkinsPage'));
+const CurseForgePage = lazy(() => import('./pages/CurseForgePage'));
 
 /**
  * Spinner ladowania dla Suspense
@@ -90,6 +91,7 @@ function App() {
                     <Route index element={<Suspense fallback={<PageLoader />}><DashboardPage /></Suspense>} />
                     <Route path="users" element={<Suspense fallback={<PageLoader />}><UsersPage /></Suspense>} />
                     <Route path="mods" element={<Suspense fallback={<PageLoader />}><ModsPage /></Suspense>} />
+                    <Route path="curseforge" element={<Suspense fallback={<PageLoader />}><CurseForgePage /></Suspense>} />
                     <Route path="config" element={<Suspense fallback={<PageLoader />}><ConfigPage /></Suspense>} />
                     <Route path="broadcasts" element={<Suspense fallback={<PageLoader />}><BroadcastsPage /></Suspense>} />
                     <Route path="logs" element={<Suspense fallback={<PageLoader />}><LogsPage /></Suspense>} />

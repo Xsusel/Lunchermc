@@ -26,6 +26,7 @@ services:
       - MC_SERVER_IP=${MC_SERVER_IP:-localhost}
       - MC_SERVER_PORT=${MC_SERVER_PORT:-25565}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - CURSEFORGE_API_KEY=${CURSEFORGE_API_KEY:-}
       - BACKUP_DIR=/app/data/backups
     volumes:
       # Dane persistentne

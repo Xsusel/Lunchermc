@@ -624,4 +624,56 @@ export const newsApi = {
     }
 };
 
+export const curseforgeApi = {
+    // Szukanie modow
+    searchMods: async (params = {}) => {
+        const query = new URLSearchParams();
+        if (params.q) query.append('q', params.q);
+        if (params.gameVersion) query.append('gameVersion', params.gameVersion);
+        if (params.modLoaderType) query.append('modLoaderType', params.modLoaderType);
+        if (params.category) query.append('category', params.category);
+        if (params.pageSize) query.append('pageSize', params.pageSize);
+        if (params.index) query.append('index', params.index);
+        const response = await api.get(`/admin/curseforge/search?${query.toString()}`);
+        return response.data;
+    },
+    searchModpacks: async (params = {}) => {
+        const query = new URLSearchParams();
+        if (params.q) query.append('q', params.q);
+        if (params.gameVersion) query.append('gameVersion', params.gameVersion);
+        if (params.modLoaderType) query.append('modLoaderType', params.modLoaderType);
+        if (params.pageSize) query.append('pageSize', params.pageSize);
+        if (params.index) query.append('index', params.index);
+        const response = await api.get(`/admin/curseforge/modpacks?${query.toString()}`);
+        return response.data;
+    },
+    getMod: async (modId) => {
+        const response = await api.get(`/admin/curseforge/mod/${modId}`);
+        return response.data;
+    },
+    getModFiles: async (modId, params = {}) => {
+        const query = new URLSearchParams();
+        if (params.gameVersion) query.append('gameVersion', params.gameVersion);
+        if (params.modLoaderType) query.append('modLoaderType', params.modLoaderType);
+        const response = await api.get(`/admin/curseforge/mod/${modId}/files?${query.toString()}`);
+        return response.data;
+    },
+    getCategories: async () => {
+        const response = await api.get('/admin/curseforge/categories');
+        return response.data;
+    },
+    getVersions: async () => {
+        const response = await api.get('/admin/curseforge/versions');
+        return response.data;
+    },
+    importMod: async (data) => {
+        const response = await api.post('/admin/curseforge/import-mod', data, { timeout: 120000 });
+        return response.data;
+    },
+    importModpack: async (data) => {
+        const response = await api.post('/admin/curseforge/import-modpack', data, { timeout: 600000 });
+        return response.data;
+    }
+};
+
 export default api;
