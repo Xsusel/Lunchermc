@@ -76,4 +76,41 @@ export function ensureCriticalSchema() {
     addColumnIfMissing('launcher_versions', 'sha512', 'TEXT');
     addColumnIfMissing('launcher_versions', 'file_size', 'INTEGER DEFAULT 0');
     addColumnIfMissing('launcher_versions', 'filename', 'TEXT');
+
+    // servers - per-server game config (migration 15)
+    addColumnIfMissing('servers', 'game_version', "TEXT DEFAULT '1.20.1'");
+    addColumnIfMissing('servers', 'loader_type', "TEXT DEFAULT 'vanilla'");
+    addColumnIfMissing('servers', 'forge_version', 'TEXT');
+    addColumnIfMissing('servers', 'fabric_version', 'TEXT');
+    addColumnIfMissing('servers', 'java_args', "TEXT DEFAULT '-Xmx4G -Xms2G -XX:+UseG1GC'");
+    addColumnIfMissing('servers', 'maintenance_mode', 'INTEGER DEFAULT 0');
+    addColumnIfMissing('servers', 'maintenance_message', 'TEXT');
+
+    // Create junction tables if they don't exist
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS server_mods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id INTEGER NOT NULL,
+                mod_id INTEGER NOT NULL,
+                is_enabled INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+                FOREIGN KEY (mod_id) REFERENCES mods(id) ON DELETE CASCADE,
+                UNIQUE(server_id, mod_id)
+            );
+            CREATE TABLE IF NOT EXISTS server_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id INTEGER NOT NULL,
+                file_id INTEGER NOT NULL,
+                is_enabled INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+                FOREIGN KEY (file_id) REFERENCES game_files(id) ON DELETE CASCADE,
+                UNIQUE(server_id, file_id)
+            );
+        `);
+    } catch (e) {
+        // Tables may already exist
+    }
 }

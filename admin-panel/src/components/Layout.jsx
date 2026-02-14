@@ -28,7 +28,7 @@ const navItems = [
     { path: '/users', label: 'Użytkownicy', icon: Users },
     { path: '/mods', label: 'Mody', icon: Package },
     { path: '/curseforge', label: 'CurseForge', icon: Box },
-    { path: '/config', label: 'Konfiguracja', icon: Settings },
+    { path: '/config', label: 'Serwery', icon: Settings },
     { path: '/broadcasts', label: 'Powiadomienia', icon: Bell },
     { path: '/rules', label: 'Regulamin', icon: ScrollText },
     { path: '/news', label: 'Aktualnosci', icon: Newspaper },

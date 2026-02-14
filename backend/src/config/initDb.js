@@ -182,6 +182,7 @@ db.exec(`
 `);
 
 // Tabela serwerów (wiele serwerów do wyboru w launcherze)
+// Zawiera kolumny z migracji: 15 (per-server game config)
 db.exec(`
     CREATE TABLE IF NOT EXISTS servers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,8 +193,43 @@ db.exec(`
         is_default INTEGER DEFAULT 0,
         is_enabled INTEGER DEFAULT 1,
         display_order INTEGER DEFAULT 0,
+        game_version TEXT DEFAULT '1.20.1',
+        loader_type TEXT DEFAULT 'vanilla',
+        forge_version TEXT,
+        fabric_version TEXT,
+        java_args TEXT DEFAULT '-Xmx4G -Xms2G -XX:+UseG1GC',
+        maintenance_mode INTEGER DEFAULT 0,
+        maintenance_message TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+
+// Tabela przypisań modów do serwerów (migracja 15)
+db.exec(`
+    CREATE TABLE IF NOT EXISTS server_mods (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL,
+        mod_id INTEGER NOT NULL,
+        is_enabled INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+        FOREIGN KEY (mod_id) REFERENCES mods(id) ON DELETE CASCADE,
+        UNIQUE(server_id, mod_id)
+    )
+`);
+
+// Tabela przypisań plików do serwerów (migracja 15)
+db.exec(`
+    CREATE TABLE IF NOT EXISTS server_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL,
+        file_id INTEGER NOT NULL,
+        is_enabled INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+        FOREIGN KEY (file_id) REFERENCES game_files(id) ON DELETE CASCADE,
+        UNIQUE(server_id, file_id)
     )
 `);
 
@@ -255,6 +291,10 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_ban_appeals_v2_status ON ban_appeals_v2(status);
     CREATE INDEX IF NOT EXISTS idx_crash_reports_user ON crash_reports(user_id);
     CREATE INDEX IF NOT EXISTS idx_crash_reports_created ON crash_reports(created_at);
+    CREATE INDEX IF NOT EXISTS idx_server_mods_server ON server_mods(server_id);
+    CREATE INDEX IF NOT EXISTS idx_server_mods_mod ON server_mods(mod_id);
+    CREATE INDEX IF NOT EXISTS idx_server_files_server ON server_files(server_id);
+    CREATE INDEX IF NOT EXISTS idx_server_files_file ON server_files(file_id);
 `);
 
 // ============================================
@@ -300,6 +340,68 @@ if (serversExist.count === 0) {
         `).run('Serwer Xsus', gameConfig.server_ip, gameConfig.server_port || 25565);
         console.log('Zmigrowano serwer z game_config do tabeli servers');
     }
+}
+
+// ============================================
+// MIGRACJA DANYCH: per-server config i przypisanie modów
+// ============================================
+
+// Kopiuj game_config do serwerów, które jeszcze nie mają game_version ustawionej
+try {
+    const serversToMigrate = db.prepare(
+        "SELECT id FROM servers WHERE game_version = '1.20.1' AND loader_type = 'vanilla'"
+    ).all();
+    const gameConfig = db.prepare('SELECT * FROM game_config WHERE id = 1').get();
+
+    if (gameConfig && serversToMigrate.length > 0) {
+        const updateStmt = db.prepare(`
+            UPDATE servers SET
+                game_version = ?,
+                loader_type = ?,
+                forge_version = ?,
+                fabric_version = ?,
+                java_args = ?
+            WHERE id = ? AND game_version = '1.20.1' AND loader_type = 'vanilla'
+        `);
+        for (const server of serversToMigrate) {
+            updateStmt.run(
+                gameConfig.game_version || '1.20.1',
+                gameConfig.loader_type || 'vanilla',
+                gameConfig.forge_version || null,
+                gameConfig.fabric_version || null,
+                gameConfig.java_args || '-Xmx4G -Xms2G -XX:+UseG1GC',
+                server.id
+            );
+        }
+        console.log('Zmigrowano konfigurację gry do serwerów');
+    }
+} catch (e) {
+    // Ignore - columns may not exist yet
+}
+
+// Przypisz istniejące mody do wszystkich serwerów (jeśli server_mods jest puste)
+try {
+    const serverModsCount = db.prepare('SELECT COUNT(*) as count FROM server_mods').get();
+    if (serverModsCount.count === 0) {
+        const allServers = db.prepare('SELECT id FROM servers').all();
+        const allMods = db.prepare('SELECT id FROM mods').all();
+        if (allServers.length > 0 && allMods.length > 0) {
+            const insertStmt = db.prepare(
+                'INSERT OR IGNORE INTO server_mods (server_id, mod_id) VALUES (?, ?)'
+            );
+            const assignAll = db.transaction(() => {
+                for (const server of allServers) {
+                    for (const mod of allMods) {
+                        insertStmt.run(server.id, mod.id);
+                    }
+                }
+            });
+            assignAll();
+            console.log(`Przypisano ${allMods.length} modów do ${allServers.length} serwerów`);
+        }
+    }
+} catch (e) {
+    // Ignore
 }
 
 // ============================================
@@ -363,6 +465,15 @@ addColumnIfMissing('mods', 'curseforge_url', 'TEXT');
 addColumnIfMissing('launcher_versions', 'sha512', 'TEXT');
 addColumnIfMissing('launcher_versions', 'file_size', 'INTEGER DEFAULT 0');
 addColumnIfMissing('launcher_versions', 'filename', 'TEXT');
+
+// servers - per-server game config (migracja 15)
+addColumnIfMissing('servers', 'game_version', "TEXT DEFAULT '1.20.1'");
+addColumnIfMissing('servers', 'loader_type', "TEXT DEFAULT 'vanilla'");
+addColumnIfMissing('servers', 'forge_version', 'TEXT');
+addColumnIfMissing('servers', 'fabric_version', 'TEXT');
+addColumnIfMissing('servers', 'java_args', "TEXT DEFAULT '-Xmx4G -Xms2G -XX:+UseG1GC'");
+addColumnIfMissing('servers', 'maintenance_mode', 'INTEGER DEFAULT 0');
+addColumnIfMissing('servers', 'maintenance_message', 'TEXT');
 
 console.log('Baza danych zainicjalizowana pomyslnie');
 console.log(`Lokalizacja: ${process.env.DATABASE_PATH || './data/launcher.db'}`);

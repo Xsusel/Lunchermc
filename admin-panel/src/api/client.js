@@ -170,7 +170,7 @@ export const serversApi = {
         return response.data;
     },
 
-    // Aktualizacja serwera
+    // Aktualizacja serwera (dane + konfiguracja gry)
     update: async (id, data) => {
         const response = await api.put(`/admin/servers/${id}`, data);
         return response.data;
@@ -191,6 +191,60 @@ export const serversApi = {
     // Zmiana kolejności
     reorder: async (ids) => {
         const response = await api.post('/admin/servers/reorder', { ids });
+        return response.data;
+    },
+
+    // Pobierz mody serwera (z informacją o przypisaniu)
+    getMods: async (id) => {
+        const response = await api.get(`/admin/servers/${id}/mods`);
+        return response.data;
+    },
+
+    // Ustaw mody serwera
+    setMods: async (id, modIds) => {
+        const response = await api.put(`/admin/servers/${id}/mods`, { modIds });
+        return response.data;
+    },
+
+    // Przypisz mod do serwera
+    assignMod: async (serverId, modId) => {
+        const response = await api.post(`/admin/servers/${serverId}/mods/${modId}`);
+        return response.data;
+    },
+
+    // Usuń mod z serwera
+    removeMod: async (serverId, modId) => {
+        const response = await api.delete(`/admin/servers/${serverId}/mods/${modId}`);
+        return response.data;
+    },
+
+    // Włącz/wyłącz mod na serwerze
+    toggleMod: async (serverId, modId) => {
+        const response = await api.post(`/admin/servers/${serverId}/mods/${modId}/toggle`);
+        return response.data;
+    },
+
+    // Wyczyść wszystkie mody z serwera
+    clearMods: async (id) => {
+        const response = await api.post(`/admin/servers/${id}/clear-mods`);
+        return response.data;
+    },
+
+    // Wyczyść wszystkie pliki i mody z serwera
+    clearFiles: async (id) => {
+        const response = await api.post(`/admin/servers/${id}/clear-files`);
+        return response.data;
+    },
+
+    // Informacje o folderze FTP serwera
+    getSyncInfo: async (id) => {
+        const response = await api.get(`/admin/servers/${id}/sync-info`);
+        return response.data;
+    },
+
+    // Synchronizuj mody z FTP serwera
+    sync: async (id) => {
+        const response = await api.post(`/admin/servers/${id}/sync`);
         return response.data;
     }
 };

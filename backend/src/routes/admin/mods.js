@@ -7,7 +7,7 @@ import { body, param, validationResult } from 'express-validator';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { Mod, ActivityLog } from '../../models/index.js';
+import { Mod, ActivityLog, Server } from '../../models/index.js';
 import { authenticateAdmin, requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import {
@@ -108,6 +108,16 @@ router.post('/mods',
             description
         });
 
+        // Auto-przypisz nowy mod do wszystkich serwerów
+        try {
+            const allServers = Server.getAll();
+            for (const server of allServers) {
+                Server.assignMod(server.id, mod.id);
+            }
+        } catch (e) {
+            // Non-critical - ignore
+        }
+
         ActivityLog.logAdminAction('mod_upload', {
             modId: mod.id,
             filename
@@ -162,6 +172,16 @@ router.post('/mods/url',
             mod_type: mod_type || 'mod',
             description
         });
+
+        // Auto-przypisz nowy mod do wszystkich serwerów
+        try {
+            const allServers = Server.getAll();
+            for (const server of allServers) {
+                Server.assignMod(server.id, mod.id);
+            }
+        } catch (e) {
+            // Non-critical - ignore
+        }
 
         ActivityLog.logAdminAction('mod_add_url', {
             modId: mod.id,

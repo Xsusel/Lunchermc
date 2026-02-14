@@ -235,6 +235,103 @@ const migrations = [
             CREATE INDEX IF NOT EXISTS idx_mods_curseforge ON mods(curseforge_id);
         `,
     },
+
+    // ------------------------------------------------------------------
+    // 15. Per-server game config and mod/file assignments
+    //     Each server gets its own game version, loader, mods, and files
+    // ------------------------------------------------------------------
+    {
+        id: 15,
+        name: 'add_per_server_config_and_assignments',
+        sql: `
+            ALTER TABLE servers ADD COLUMN game_version TEXT DEFAULT '1.20.1';
+            ALTER TABLE servers ADD COLUMN loader_type TEXT DEFAULT 'vanilla';
+            ALTER TABLE servers ADD COLUMN forge_version TEXT;
+            ALTER TABLE servers ADD COLUMN fabric_version TEXT;
+            ALTER TABLE servers ADD COLUMN java_args TEXT DEFAULT '-Xmx4G -Xms2G -XX:+UseG1GC';
+            ALTER TABLE servers ADD COLUMN maintenance_mode INTEGER DEFAULT 0;
+            ALTER TABLE servers ADD COLUMN maintenance_message TEXT;
+
+            CREATE TABLE IF NOT EXISTS server_mods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id INTEGER NOT NULL,
+                mod_id INTEGER NOT NULL,
+                is_enabled INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+                FOREIGN KEY (mod_id) REFERENCES mods(id) ON DELETE CASCADE,
+                UNIQUE(server_id, mod_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_server_mods_server ON server_mods(server_id);
+            CREATE INDEX IF NOT EXISTS idx_server_mods_mod ON server_mods(mod_id);
+
+            CREATE TABLE IF NOT EXISTS server_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                server_id INTEGER NOT NULL,
+                file_id INTEGER NOT NULL,
+                is_enabled INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+                FOREIGN KEY (file_id) REFERENCES game_files(id) ON DELETE CASCADE,
+                UNIQUE(server_id, file_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_server_files_server ON server_files(server_id);
+            CREATE INDEX IF NOT EXISTS idx_server_files_file ON server_files(file_id);
+        `,
+        postRun: () => {
+            // Migrate game_config values to existing servers
+            try {
+                const gameConfig = db.prepare('SELECT * FROM game_config WHERE id = 1').get();
+                if (gameConfig) {
+                    const servers = db.prepare('SELECT id FROM servers').all();
+                    const updateStmt = db.prepare(`
+                        UPDATE servers SET
+                            game_version = ?,
+                            loader_type = ?,
+                            forge_version = ?,
+                            fabric_version = ?,
+                            java_args = ?
+                        WHERE id = ?
+                    `);
+                    for (const server of servers) {
+                        updateStmt.run(
+                            gameConfig.game_version || '1.20.1',
+                            gameConfig.loader_type || 'vanilla',
+                            gameConfig.forge_version || null,
+                            gameConfig.fabric_version || null,
+                            gameConfig.java_args || '-Xmx4G -Xms2G -XX:+UseG1GC',
+                            server.id
+                        );
+                    }
+                    log.info('Migrated game_config to servers');
+                }
+            } catch (e) {
+                log.warn('Could not migrate game_config to servers: ' + e.message);
+            }
+
+            // Assign all existing mods to all servers
+            try {
+                const servers = db.prepare('SELECT id FROM servers').all();
+                const mods = db.prepare('SELECT id FROM mods').all();
+                if (servers.length > 0 && mods.length > 0) {
+                    const insertStmt = db.prepare(
+                        'INSERT OR IGNORE INTO server_mods (server_id, mod_id) VALUES (?, ?)'
+                    );
+                    const assignAll = db.transaction(() => {
+                        for (const server of servers) {
+                            for (const mod of mods) {
+                                insertStmt.run(server.id, mod.id);
+                            }
+                        }
+                    });
+                    assignAll();
+                    log.info(`Assigned ${mods.length} mods to ${servers.length} servers`);
+                }
+            } catch (e) {
+                log.warn('Could not assign mods to servers: ' + e.message);
+            }
+        },
+    },
 ];
 
 // ============================================
@@ -312,6 +409,19 @@ export function runMigrations() {
                         !err.message.includes('already exists')) {
                         throw err;
                     }
+                }
+            }
+
+            // Run post-migration data hooks (if any)
+            if (typeof migration.postRun === 'function') {
+                try {
+                    migration.postRun();
+                } catch (postErr) {
+                    log.warn('Post-migration hook failed', {
+                        id: migration.id,
+                        name: migration.name,
+                        error: postErr.message
+                    });
                 }
             }
 

@@ -22,18 +22,48 @@ const router = Router();
  * GET /api/launcher/config
  * Pobiera konfigurację gry dla launchera
  * Nie wymaga autoryzacji
+ *
+ * @query {number} [serverId] - ID serwera; jeśli podane, zwraca config i mody dla tego serwera
  */
 router.get('/config', asyncHandler(async (req, res) => {
-    const config = GameConfig.getPublicConfig();
-    const mods = Mod.getForLauncher();
+    const serverId = req.query.serverId ? parseInt(req.query.serverId) : null;
     const broadcasts = Broadcast.getActive();
 
-    // Pobierz inne pliki (datapacks, configs, etc.)
-    const otherFiles = db.prepare(`
-        SELECT file_type, filename, relative_path, url, sha256, file_size, is_required
-        FROM game_files_extended
-        WHERE is_enabled = 1
-    `).all();
+    // Pobierz listę serwerów (zawsze zwracamy wszystkie dla launchera)
+    const servers = Server.getForLauncher();
+
+    // Określ serwer docelowy
+    let targetServer = null;
+    if (serverId) {
+        targetServer = Server.getById(serverId);
+    }
+    if (!targetServer) {
+        targetServer = Server.getDefault();
+    }
+
+    // Konfiguracja gry - z wybranego serwera lub globalna jako fallback
+    let config;
+    let mods;
+    let otherFiles;
+
+    if (targetServer) {
+        config = Server.getServerConfig(targetServer.id);
+        mods = Server.getModsForLauncher(targetServer.id);
+        otherFiles = Server.getFilesForLauncher(targetServer.id);
+    } else {
+        // Fallback na globalną konfigurację (kompatybilność wsteczna)
+        config = GameConfig.getPublicConfig();
+        mods = Mod.getForLauncher();
+        try {
+            otherFiles = db.prepare(`
+                SELECT file_type, filename, relative_path, url, sha256, file_size, is_required
+                FROM game_files_extended
+                WHERE is_enabled = 1
+            `).all();
+        } catch (e) {
+            otherFiles = [];
+        }
+    }
 
     // Połącz wszystko w jedną listę plików
     const files = [
@@ -46,7 +76,7 @@ router.get('/config', asyncHandler(async (req, res) => {
             size: m.fileSize,
             required: m.required
         })),
-        ...otherFiles.map(f => ({
+        ...(otherFiles || []).map(f => ({
             type: f.file_type,
             path: f.relative_path,
             filename: f.filename,
@@ -57,20 +87,17 @@ router.get('/config', asyncHandler(async (req, res) => {
         }))
     ];
 
-    // Pobierz listę serwerów
-    const servers = Server.getForLauncher();
-
     res.json({
         success: true,
         data: {
             config,
             servers,
-            mods, // Zachowujemy dla kompatybilności wstecznej
-            files, // Nowa zunifikowana lista
+            serverId: targetServer?.id || null,
+            mods,
+            files,
             broadcasts,
-            // Metadane dla launchera
             meta: {
-                apiVersion: '1.1.0',
+                apiVersion: '2.0.0',
                 timestamp: new Date().toISOString()
             }
         }
@@ -80,9 +107,21 @@ router.get('/config', asyncHandler(async (req, res) => {
 /**
  * GET /api/launcher/mods
  * Pobiera listę modów do pobrania
+ * @query {number} [serverId] - ID serwera; jeśli podane, zwraca mody tylko dla tego serwera
  */
 router.get('/mods', asyncHandler(async (req, res) => {
-    const mods = Mod.getForLauncher();
+    const serverId = req.query.serverId ? parseInt(req.query.serverId) : null;
+
+    let mods;
+    if (serverId) {
+        mods = Server.getModsForLauncher(serverId);
+    } else {
+        // Fallback: domyślny serwer lub globalna lista
+        const defaultServer = Server.getDefault();
+        mods = defaultServer
+            ? Server.getModsForLauncher(defaultServer.id)
+            : Mod.getForLauncher();
+    }
 
     res.json({
         success: true,
@@ -235,13 +274,32 @@ router.get('/server-status', asyncHandler(async (req, res) => {
  * GET /api/launcher/manifest
  * Pobiera pełny manifest plików do synchronizacji
  * Używany do sprawdzania integralności plików
+ * @query {number} [serverId] - ID serwera
  */
 router.get('/manifest', asyncHandler(async (req, res) => {
-    const config = GameConfig.getPublicConfig();
-    const mods = Mod.getForLauncher();
+    const serverId = req.query.serverId ? parseInt(req.query.serverId) : null;
 
-    // Budujemy manifest plików
+    let config;
+    let mods;
+    let targetServer = null;
+
+    if (serverId) {
+        targetServer = Server.getById(serverId);
+    }
+    if (!targetServer) {
+        targetServer = Server.getDefault();
+    }
+
+    if (targetServer) {
+        config = Server.getServerConfig(targetServer.id);
+        mods = Server.getModsForLauncher(targetServer.id);
+    } else {
+        config = GameConfig.getPublicConfig();
+        mods = Mod.getForLauncher();
+    }
+
     const manifest = {
+        serverId: targetServer?.id || null,
         version: config.gameVersion,
         loaderType: config.loaderType,
         forgeVersion: config.forgeVersion,
@@ -271,11 +329,13 @@ router.get('/manifest', asyncHandler(async (req, res) => {
  * POST /api/launcher/verify-files
  * Weryfikuje integralność plików klienta
  * Klient wysyła listę posiadanych plików z sumami kontrolnymi
+ * @body {number} [serverId] - ID serwera
+ * @body {array} files - Lista plików klienta [{filename, sha256}]
  */
 router.post('/verify-files',
     optionalAuth,
     asyncHandler(async (req, res) => {
-        const { files } = req.body;
+        const { files, serverId } = req.body;
 
         if (!Array.isArray(files)) {
             return res.status(400).json({
@@ -284,24 +344,33 @@ router.post('/verify-files',
             });
         }
 
-        const serverMods = Mod.getForLauncher();
+        // Pobierz mody dla konkretnego serwera
+        let serverMods;
+        const targetServerId = serverId ? parseInt(serverId) : null;
+
+        if (targetServerId) {
+            serverMods = Server.getModsForLauncher(targetServerId);
+        } else {
+            const defaultServer = Server.getDefault();
+            serverMods = defaultServer
+                ? Server.getModsForLauncher(defaultServer.id)
+                : Mod.getForLauncher();
+        }
+
         const serverModsMap = new Map(serverMods.map(m => [m.filename, m]));
 
         const result = {
-            toDownload: [],  // Pliki do pobrania (brakujące lub nieprawidłowe)
-            toDelete: [],    // Pliki do usunięcia (nie są na serwerze)
-            valid: []        // Pliki poprawne
+            toDownload: [],
+            toDelete: [],
+            valid: []
         };
 
-        // Sprawdzamy pliki klienta
         const clientFilesMap = new Map(files.map(f => [f.filename, f.sha256]));
 
-        // Sprawdzamy które pliki serwera brakuje lub są nieprawidłowe
         for (const mod of serverMods) {
             const clientSha256 = clientFilesMap.get(mod.filename);
 
             if (!clientSha256) {
-                // Plik nie istnieje u klienta
                 result.toDownload.push({
                     filename: mod.filename,
                     url: mod.url,
@@ -310,7 +379,6 @@ router.post('/verify-files',
                     reason: 'missing'
                 });
             } else if (clientSha256 !== mod.sha256) {
-                // Plik istnieje ale ma złą sumę kontrolną
                 result.toDownload.push({
                     filename: mod.filename,
                     url: mod.url,
@@ -323,7 +391,6 @@ router.post('/verify-files',
             }
         }
 
-        // Sprawdzamy które pliki klienta powinny być usunięte
         for (const clientFile of files) {
             if (!serverModsMap.has(clientFile.filename)) {
                 result.toDelete.push(clientFile.filename);
