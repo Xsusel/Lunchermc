@@ -1607,6 +1607,72 @@ class GameManager {
     }
 
     /**
+     * Usuwa pliki z zarządzanych folderów, które nie są na liście serwera.
+     * Zapobiega mieszaniu modów/configów między serwerami.
+     */
+    cleanupOldFiles(files, gamePath) {
+        const managedFolders = ['mods', 'config', 'resourcepacks', 'shaderpacks', 'scripts', 'kubejs'];
+
+        // Zbuduj zbiór oczekiwanych ścieżek względnych
+        const expectedPaths = new Set(
+            files.map(f => f.path || `mods/${f.filename}`)
+        );
+
+        const removed = [];
+
+        for (const folder of managedFolders) {
+            const folderPath = path.join(gamePath, folder);
+            if (!fs.existsSync(folderPath)) continue;
+
+            const scanAndClean = (dir, baseFolder) => {
+                let entries;
+                try {
+                    entries = fs.readdirSync(dir, { withFileTypes: true });
+                } catch (e) {
+                    return;
+                }
+
+                for (const entry of entries) {
+                    const fullPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        scanAndClean(fullPath, baseFolder);
+                        // Usuń pusty folder po czyszczeniu
+                        try {
+                            const remaining = fs.readdirSync(fullPath);
+                            if (remaining.length === 0) fs.rmdirSync(fullPath);
+                        } catch (e) {}
+                    } else {
+                        // Ignoruj pliki tymczasowe (.partial, .progress)
+                        if (entry.name.endsWith('.partial') || entry.name.endsWith('.progress')) continue;
+
+                        const relativePath = path.relative(gamePath, fullPath);
+                        if (!expectedPaths.has(relativePath)) {
+                            try {
+                                fs.unlinkSync(fullPath);
+                                removed.push(relativePath);
+                                console.log(`[CLEANUP] Removed: ${relativePath}`);
+                            } catch (e) {
+                                console.warn(`[CLEANUP] Failed to remove: ${relativePath}`, e.message);
+                            }
+                        }
+                    }
+                }
+            };
+
+            scanAndClean(folderPath, folder);
+        }
+
+        if (removed.length > 0) {
+            console.log(`[CLEANUP] Removed ${removed.length} files from previous server`);
+            this.sendToRenderer('game-status', {
+                status: `Usunięto ${removed.length} nieaktualnych plików`
+            });
+        }
+
+        return removed;
+    }
+
+    /**
      * Synchronizuje pliki z serwerem - RÓWNOLEGŁE POBIERANIE z optymalizacjami
      */
     async syncFiles(files, gamePath) {
@@ -1619,11 +1685,17 @@ class GameManager {
             downloaded: [],
             skipped: [],
             errors: [],
+            removed: [],
             totalFiles: files.length
         };
 
+        // FAZA 0: Usuń pliki które nie należą do aktualnego serwera
+        this.sendToRenderer('game-status', { status: 'Czyszczenie starych plików...' });
+        results.removed = this.cleanupOldFiles(files, gamePath);
+
         console.log(`\n========================================`);
         console.log(`Starting sync of ${files.length} files`);
+        console.log(`Removed old files: ${results.removed.length}`);
         console.log(`Concurrent downloads: ${CONCURRENT_DOWNLOADS}`);
         console.log(`Concurrent verifications: ${CONCURRENT_VERIFICATIONS}`);
         console.log(`========================================\n`);
@@ -1782,6 +1854,7 @@ class GameManager {
         console.log(`Sync complete:`);
         console.log(`  Downloaded: ${results.downloaded.length}`);
         console.log(`  Cached: ${results.skipped.length}`);
+        console.log(`  Removed: ${results.removed.length}`);
         console.log(`  Errors: ${results.errors.length}`);
         console.log(`========================================\n`);
 

@@ -26,6 +26,16 @@ export const calculateSHA256 = (filePath) => {
 };
 
 /**
+ * Oblicza sumę kontrolną SHA256 dla pliku (synchronicznie)
+ * @param {string} filePath - Ścieżka do pliku
+ * @returns {string} Suma kontrolna w formacie hex
+ */
+export const calculateSHA256Sync = (filePath) => {
+    const data = fs.readFileSync(filePath);
+    return crypto.createHash('sha256').update(data).digest('hex');
+};
+
+/**
  * Oblicza sumę kontrolną SHA256 dla buffera
  * @param {Buffer} buffer - Dane
  * @returns {string} Suma kontrolna
@@ -120,7 +130,9 @@ export const formatFileSize = (bytes) => {
  */
 export const sanitizeFilename = (filename) => {
     return filename
-        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        // Usuń tylko naprawdę niebezpieczne znaki (path traversal, null bytes, kontrolne)
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+        .replace(/\.\./g, '_')
         .replace(/_{2,}/g, '_')
         .slice(0, 255);
 };
