@@ -30,7 +30,10 @@ router.post('/register',
             .matches(/^[a-zA-Z0-9_]+$/).withMessage('Dozwolone: litery, cyfry, podkreślenia'),
         body('password')
             .notEmpty().withMessage('Hasło jest wymagane')
-            .isLength({ min: 6 }).withMessage('Hasło musi mieć minimum 6 znaków')
+            .isLength({ min: 8 }).withMessage('Hasło musi mieć minimum 8 znaków')
+            .matches(/[A-Z]/).withMessage('Hasło musi zawierać dużą literę')
+            .matches(/[a-z]/).withMessage('Hasło musi zawierać małą literę')
+            .matches(/[0-9]/).withMessage('Hasło musi zawierać cyfrę')
     ],
     asyncHandler(async (req, res) => {
         // Walidacja
@@ -166,7 +169,10 @@ router.post('/change-password',
         body('currentPassword').notEmpty().withMessage('Aktualne hasło jest wymagane'),
         body('newPassword')
             .notEmpty().withMessage('Nowe hasło jest wymagane')
-            .isLength({ min: 6 }).withMessage('Nowe hasło musi mieć minimum 6 znaków')
+            .isLength({ min: 8 }).withMessage('Nowe hasło musi mieć minimum 8 znaków')
+            .matches(/[A-Z]/).withMessage('Nowe hasło musi zawierać dużą literę')
+            .matches(/[a-z]/).withMessage('Nowe hasło musi zawierać małą literę')
+            .matches(/[0-9]/).withMessage('Nowe hasło musi zawierać cyfrę')
     ],
     asyncHandler(async (req, res) => {
         const errors = validationResult(req);
@@ -215,6 +221,151 @@ router.post('/verify',
                     username: req.user.username
                 }
             }
+        });
+    })
+);
+
+/**
+ * POST /api/auth/set-security-question
+ * Ustawia pytanie bezpieczeństwa (wymaga autoryzacji)
+ */
+router.post('/set-security-question',
+    authenticateUser,
+    [
+        body('question')
+            .trim()
+            .notEmpty().withMessage('Pytanie bezpieczeństwa jest wymagane')
+            .isLength({ min: 5, max: 200 }).withMessage('Pytanie musi mieć 5-200 znaków'),
+        body('answer')
+            .trim()
+            .notEmpty().withMessage('Odpowiedź jest wymagana')
+            .isLength({ min: 2, max: 100 }).withMessage('Odpowiedź musi mieć 2-100 znaków')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const { question, answer } = req.body;
+
+        User.setSecurityQuestion(req.userId, question, answer);
+
+        res.json({
+            success: true,
+            message: 'Pytanie bezpieczeństwa zostało ustawione'
+        });
+    })
+);
+
+/**
+ * POST /api/auth/forgot-password
+ * Zwraca pytanie bezpieczeństwa dla użytkownika (bez odpowiedzi)
+ */
+router.post('/forgot-password',
+    authLimiter,
+    [
+        body('username')
+            .trim()
+            .notEmpty().withMessage('Nazwa użytkownika jest wymagana')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const { username } = req.body;
+
+        const question = User.getSecurityQuestion(username);
+
+        if (!question) {
+            return res.status(404).json({
+                success: false,
+                error: 'Użytkownik nie istnieje lub nie ustawił pytania bezpieczeństwa'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                username: username.toLowerCase(),
+                securityQuestion: question
+            }
+        });
+    })
+);
+
+/**
+ * POST /api/auth/reset-password
+ * Resetuje hasło po weryfikacji odpowiedzi na pytanie bezpieczeństwa
+ */
+router.post('/reset-password',
+    authLimiter,
+    [
+        body('username')
+            .trim()
+            .notEmpty().withMessage('Nazwa użytkownika jest wymagana'),
+        body('answer')
+            .trim()
+            .notEmpty().withMessage('Odpowiedź jest wymagana'),
+        body('newPassword')
+            .notEmpty().withMessage('Nowe hasło jest wymagane')
+            .isLength({ min: 8 }).withMessage('Nowe hasło musi mieć minimum 8 znaków')
+            .matches(/[A-Z]/).withMessage('Nowe hasło musi zawierać dużą literę')
+            .matches(/[a-z]/).withMessage('Nowe hasło musi zawierać małą literę')
+            .matches(/[0-9]/).withMessage('Nowe hasło musi zawierać cyfrę')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const { username, answer, newPassword } = req.body;
+
+        // Weryfikujemy odpowiedź na pytanie bezpieczeństwa
+        const isValid = User.verifySecurityAnswer(username, answer);
+        if (!isValid) {
+            return res.status(401).json({
+                success: false,
+                error: 'Nieprawidłowa odpowiedź na pytanie bezpieczeństwa'
+            });
+        }
+
+        // Resetujemy hasło
+        const success = User.resetPassword(username, newPassword);
+        if (!success) {
+            return res.status(404).json({
+                success: false,
+                error: 'Użytkownik nie istnieje'
+            });
+        }
+
+        // Logujemy reset hasła
+        const user = User.findByUsername(username);
+        if (user) {
+            ActivityLog.logSecurityEvent('password_reset', getClientIp(req), {
+                userId: user.id,
+                username: user.username
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Hasło zostało zresetowane pomyślnie'
         });
     })
 );

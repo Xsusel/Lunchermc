@@ -5,6 +5,9 @@
 import db from '../config/database.js';
 import bcrypt from 'bcryptjs';
 
+// NOTE: Column migrations (security_question) have been moved to
+// /config/migrations.js (migration 4). They run at startup.
+
 class User {
     /**
      * Tworzy nowego użytkownika
@@ -160,6 +163,65 @@ class User {
     static isUsernameAvailable(username) {
         const user = db.prepare('SELECT id FROM users WHERE username = ?').get(username.toLowerCase());
         return !user;
+    }
+
+    /**
+     * Ustawia pytanie bezpieczeństwa i odpowiedź dla użytkownika
+     * @param {number} userId - ID użytkownika
+     * @param {string} question - Pytanie bezpieczeństwa
+     * @param {string} answer - Odpowiedź (będzie zahashowana)
+     * @returns {boolean} Czy operacja się powiodła
+     */
+    static setSecurityQuestion(userId, question, answer) {
+        const answerHash = bcrypt.hashSync(answer.toLowerCase().trim(), 12);
+        const result = db.prepare(`
+            UPDATE users SET security_question = ?, security_answer_hash = ? WHERE id = ?
+        `).run(question, answerHash, userId);
+        return result.changes > 0;
+    }
+
+    /**
+     * Weryfikuje odpowiedź na pytanie bezpieczeństwa
+     * @param {string} username - Nazwa użytkownika
+     * @param {string} answer - Odpowiedź do weryfikacji
+     * @returns {boolean} Czy odpowiedź jest poprawna
+     */
+    static verifySecurityAnswer(username, answer) {
+        const user = db.prepare(`
+            SELECT security_answer_hash FROM users WHERE username = ?
+        `).get(username.toLowerCase());
+
+        if (!user || !user.security_answer_hash) return false;
+
+        return bcrypt.compareSync(answer.toLowerCase().trim(), user.security_answer_hash);
+    }
+
+    /**
+     * Resetuje hasło użytkownika (po weryfikacji pytania bezpieczeństwa)
+     * @param {string} username - Nazwa użytkownika
+     * @param {string} newPassword - Nowe hasło
+     * @returns {boolean} Czy operacja się powiodła
+     */
+    static resetPassword(username, newPassword) {
+        const hashedPassword = bcrypt.hashSync(newPassword, 12);
+        const result = db.prepare(`
+            UPDATE users SET password_hash = ? WHERE username = ?
+        `).run(hashedPassword, username.toLowerCase());
+        return result.changes > 0;
+    }
+
+    /**
+     * Pobiera pytanie bezpieczeństwa użytkownika
+     * @param {string} username - Nazwa użytkownika
+     * @returns {string|null} Pytanie bezpieczeństwa lub null
+     */
+    static getSecurityQuestion(username) {
+        const user = db.prepare(`
+            SELECT security_question FROM users WHERE username = ?
+        `).get(username.toLowerCase());
+
+        if (!user || !user.security_question) return null;
+        return user.security_question;
     }
 }
 

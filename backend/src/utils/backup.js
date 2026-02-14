@@ -10,6 +10,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import db from '../config/database.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('Backup');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,7 +64,7 @@ export async function createBackup(options = {}) {
         const metadataPath = path.join(BACKUP_DIR, `${filename}.meta.json`);
         fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
 
-        console.log(`[Backup] Utworzono backup: ${filename} (${formatSize(metadata.size)})`);
+        log.info('Utworzono backup', { filename, size: formatSize(metadata.size) });
 
         // Rotacja starych backupów
         await rotateBackups();
@@ -74,7 +77,7 @@ export async function createBackup(options = {}) {
             createdAt: metadata.createdAt
         };
     } catch (error) {
-        console.error('[Backup] Błąd tworzenia backupu:', error);
+        log.error('Błąd tworzenia backupu', error);
         return {
             success: false,
             error: error.message
@@ -123,7 +126,7 @@ export function listBackups() {
 
         return backups;
     } catch (error) {
-        console.error('[Backup] Błąd listowania backupów:', error);
+        log.error('Błąd listowania backupów', error);
         return [];
     }
 }
@@ -165,7 +168,7 @@ export async function restoreBackup(filename) {
         // Skopiuj backup do głównej lokalizacji
         fs.copyFileSync(backupPath, dbPath);
 
-        console.log(`[Backup] Przywrócono z: ${filename}`);
+        log.info('Przywrócono z backupu', { filename });
 
         return {
             success: true,
@@ -173,7 +176,7 @@ export async function restoreBackup(filename) {
             preRestoreBackup: preRestoreBackup.filename
         };
     } catch (error) {
-        console.error('[Backup] Błąd przywracania:', error);
+        log.error('Błąd przywracania', error);
         return {
             success: false,
             error: error.message
@@ -199,10 +202,10 @@ export function deleteBackup(filename) {
             fs.unlinkSync(metadataPath);
         }
 
-        console.log(`[Backup] Usunięto: ${filename}`);
+        log.info('Usunięto backup', { filename });
         return { success: true };
     } catch (error) {
-        console.error('[Backup] Błąd usuwania:', error);
+        log.error('Błąd usuwania', error);
         return { success: false, error: error.message };
     }
 }
@@ -222,11 +225,11 @@ async function rotateBackups() {
 
             for (const backup of toDelete) {
                 deleteBackup(backup.filename);
-                console.log(`[Backup] Rotacja - usunięto: ${backup.filename}`);
+                log.info('Rotacja - usunięto', { filename: backup.filename });
             }
         }
     } catch (error) {
-        console.error('[Backup] Błąd rotacji:', error);
+        log.error('Błąd rotacji', error);
     }
 }
 
@@ -269,23 +272,23 @@ let backupInterval = null;
  */
 export function startAutoBackup() {
     if (backupInterval) {
-        console.log('[Backup] Auto-backup już działa');
+        log.info('Auto-backup już działa');
         return;
     }
 
     // Pierwszy backup po 1 minucie od startu (pozwól serwerowi się uruchomić)
     setTimeout(async () => {
-        console.log('[Backup] Wykonuję pierwszy backup po starcie...');
+        log.info('Wykonuję pierwszy backup po starcie...');
         await createBackup({ type: 'scheduled', description: 'Backup przy starcie serwera' });
     }, 60 * 1000);
 
     // Następne backupy co BACKUP_INTERVAL_MS
     backupInterval = setInterval(async () => {
-        console.log('[Backup] Wykonuję zaplanowany backup...');
+        log.info('Wykonuję zaplanowany backup...');
         await createBackup({ type: 'scheduled', description: 'Automatyczny backup' });
     }, BACKUP_INTERVAL_MS);
 
-    console.log(`[Backup] Auto-backup uruchomiony (co ${BACKUP_INTERVAL_MS / (60 * 60 * 1000)} godzin)`);
+    log.info('Auto-backup uruchomiony', { intervalHours: BACKUP_INTERVAL_MS / (60 * 60 * 1000) });
 }
 
 /**
@@ -295,7 +298,61 @@ export function stopAutoBackup() {
     if (backupInterval) {
         clearInterval(backupInterval);
         backupInterval = null;
-        console.log('[Backup] Auto-backup zatrzymany');
+        log.info('Auto-backup zatrzymany');
+    }
+}
+
+// ============================================
+// LOG RETENTION (Automatyczne czyszczenie starych logów)
+// ============================================
+
+let logRetentionInterval = null;
+
+/**
+ * Uruchamia automatyczne czyszczenie starych logów
+ * Usuwa logi starsze niż 90 dni, sesje starsze niż 30 dni
+ */
+export function startLogRetention() {
+    if (logRetentionInterval) return;
+
+    const runRetention = () => {
+        try {
+            // Usuwamy stare logi aktywności (>90 dni)
+            const deletedLogs = db.prepare(`
+                DELETE FROM activity_logs
+                WHERE created_at < datetime('now', '-90 days')
+            `).run().changes;
+
+            // Usuwamy stare sesje (>30 dni)
+            const deletedSessions = db.prepare(`
+                DELETE FROM sessions
+                WHERE created_at < datetime('now', '-30 days')
+            `).run().changes;
+
+            if (deletedLogs > 0 || deletedSessions > 0) {
+                log.info('LogRetention: Usunięto stare rekordy', { deletedLogs, deletedSessions });
+            }
+        } catch (error) {
+            log.error('LogRetention: Błąd', error);
+        }
+    };
+
+    // Uruchom przy starcie (po 2 minutach)
+    setTimeout(runRetention, 2 * 60 * 1000);
+
+    // Uruchamiaj codziennie (24h)
+    logRetentionInterval = setInterval(runRetention, 24 * 60 * 60 * 1000);
+
+    log.info('LogRetention: Scheduler uruchomiony', { interval: '24h', logRetentionDays: 90, sessionRetentionDays: 30 });
+}
+
+/**
+ * Zatrzymuje automatyczne czyszczenie logów
+ */
+export function stopLogRetention() {
+    if (logRetentionInterval) {
+        clearInterval(logRetentionInterval);
+        logRetentionInterval = null;
     }
 }
 
@@ -306,5 +363,7 @@ export default {
     deleteBackup,
     getBackupStats,
     startAutoBackup,
-    stopAutoBackup
+    stopAutoBackup,
+    startLogRetention,
+    stopLogRetention
 };

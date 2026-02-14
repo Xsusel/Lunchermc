@@ -15,6 +15,8 @@ import BroadcastsPage from './pages/BroadcastsPage';
 import LogsPage from './pages/LogsPage';
 import SystemPage from './pages/SystemPage';
 import LauncherVersionsPage from './pages/LauncherVersionsPage';
+import RulesPage from './pages/RulesPage';
+import NewsPage from './pages/NewsPage';
 
 // Komponenty
 import Layout from './components/Layout';
@@ -76,6 +78,8 @@ function App() {
                 <Route path="broadcasts" element={<BroadcastsPage />} />
                 <Route path="logs" element={<LogsPage />} />
                 <Route path="launcher-versions" element={<LauncherVersionsPage />} />
+                <Route path="rules" element={<RulesPage />} />
+                <Route path="news" element={<NewsPage />} />
                 <Route path="system" element={<SystemPage />} />
             </Route>
 

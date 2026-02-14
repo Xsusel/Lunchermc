@@ -9,11 +9,19 @@ import {
     User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion,
     PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules, News, Skin
 } from '../../models/index.js';
-import { authenticateAdmin } from '../../middleware/index.js';
+import { authenticateAdmin, requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getClientIp } from '../../utils/helpers.js';
 
 const router = Router();
+
+// Trasy 2FA, launcher-versions, maintenance wymagają roli admin
+router.use('/2fa', requireRole('admin'));
+router.use('/2fa/*', requireRole('admin'));
+router.use('/launcher-versions', requireRole('admin'));
+router.use('/launcher-versions/*', requireRole('admin'));
+router.use('/maintenance', requireRole('admin'));
+router.use('/maintenance/*', requireRole('admin'));
 
 // ============================================
 // INFORMACJE O ADMINIE
@@ -28,10 +36,87 @@ router.get('/me', asyncHandler(async (req, res) => {
         success: true,
         data: {
             id: req.admin.id,
-            username: req.admin.username
+            username: req.admin.username,
+            role: req.admin.role || 'admin'
         }
     });
 }));
+
+// ============================================
+// ZARZĄDZANIE ADMINAMI (ROLE)
+// ============================================
+
+/**
+ * POST /api/admin/admins/:id/role
+ * Zmienia rolę administratora (tylko dla adminów)
+ */
+router.post('/admins/:id/role',
+    requireRole('admin'),
+    [
+        param('id').isInt().withMessage('ID musi być liczbą'),
+        body('role').isIn(['admin', 'moderator']).withMessage('Rola musi być "admin" lub "moderator"')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const targetId = parseInt(req.params.id);
+        const { role } = req.body;
+
+        // Nie pozwalamy zmienić roli samemu sobie
+        if (targetId === req.admin.id) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nie możesz zmienić własnej roli'
+            });
+        }
+
+        const targetAdmin = Admin.findById(targetId);
+        if (!targetAdmin) {
+            return res.status(404).json({
+                success: false,
+                error: 'Administrator nie istnieje'
+            });
+        }
+
+        Admin.setRole(targetId, role);
+
+        ActivityLog.logAdminAction('admin_role_change', {
+            targetAdminId: targetId,
+            targetUsername: targetAdmin.username,
+            oldRole: targetAdmin.role || 'admin',
+            newRole: role
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: `Rola użytkownika ${targetAdmin.username} została zmieniona na ${role}`,
+            data: { id: targetId, role }
+        });
+    })
+);
+
+/**
+ * GET /api/admin/admins
+ * Lista wszystkich administratorów (tylko dla adminów)
+ */
+router.get('/admins',
+    requireRole('admin'),
+    asyncHandler(async (req, res) => {
+        const admins = Admin.getAll();
+
+        res.json({
+            success: true,
+            data: admins
+        });
+    })
+);
 
 // ============================================
 // ZARZĄDZANIE 2FA

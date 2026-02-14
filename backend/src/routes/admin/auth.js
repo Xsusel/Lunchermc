@@ -74,7 +74,8 @@ router.post('/login',
             data: {
                 admin: {
                     id: admin.id,
-                    username: admin.username
+                    username: admin.username,
+                    role: admin.role || 'admin'
                 },
                 token
             }
@@ -155,7 +156,8 @@ router.post('/2fa/verify-login',
             data: {
                 admin: {
                     id: admin.id,
-                    username: admin.username
+                    username: admin.username,
+                    role: admin.role || 'admin'
                 },
                 token: fullToken
             }

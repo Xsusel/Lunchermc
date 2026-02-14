@@ -119,6 +119,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
 
     // ============================================
+    // OFFLINE MODE
+    // ============================================
+    checkOnlineStatus: () => ipcRenderer.invoke('check-online-status'),
+    getCachedConfig: () => ipcRenderer.invoke('get-cached-config'),
+
+    // ============================================
+    // CRASH REPORTER (extended)
+    // ============================================
+    crashReporter: {
+        getReports: () => ipcRenderer.invoke('get-crash-reports'),
+        getReport: (filename) => ipcRenderer.invoke('get-crash-report', filename),
+        openFolder: () => ipcRenderer.invoke('open-crash-reports-folder')
+    },
+
+    // ============================================
     // CHANGELOG
     // ============================================
     getChangelog: () => ipcRenderer.invoke('get-changelog'),

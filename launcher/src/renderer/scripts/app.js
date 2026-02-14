@@ -18,7 +18,8 @@ const state = {
     pendingRules: null,
     servers: [],
     selectedServerId: null,
-    serverStatuses: {}
+    serverStatuses: {},
+    isOffline: false
 };
 
 // ============================================
@@ -192,6 +193,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Inicjalizuj system aktualizacji
     initAutoUpdate();
+
+    // Inicjalizuj tryb offline (nasłuchuj zmian statusu sieci)
+    initOfflineMode();
+
+    // Sprawdź czy są niedawne raporty o awariach
+    await checkRecentCrashReports();
 
     console.log('XsusLauncher gotowy!');
 });
@@ -461,6 +468,12 @@ async function handleLogin(e) {
 async function handleRegister(e) {
     e.preventDefault();
 
+    // Blokuj rejestrację w trybie offline
+    if (state.isOffline || window.isOffline) {
+        showRegisterError('Rejestracja jest niedostępna w trybie offline');
+        return;
+    }
+
     const username = elements.registerUsername.value.trim();
     const password = elements.registerPassword.value;
     const passwordConfirm = elements.registerPasswordConfirm.value;
@@ -520,8 +533,17 @@ async function loadSavedSession() {
                     updateUserUI();
                 }
             } catch {
-                // Token nieważny - wyczyść
-                await window.electronAPI?.deleteStore('token');
+                // Jeśli jesteśmy offline, użyj zapisanego username bez weryfikacji
+                if (window.isOffline) {
+                    console.log('[Offline] Używam zapisanej sesji bez weryfikacji tokenu');
+                    state.user = { username: username };
+                    state.token = token;
+                    state.isLoggedIn = true;
+                    updateUserUI();
+                } else {
+                    // Token nieważny - wyczyść
+                    await window.electronAPI?.deleteStore('token');
+                }
             }
         }
     } catch (error) {
@@ -582,53 +604,36 @@ async function loadServerConfig() {
         const response = await api.getLauncherConfig();
 
         if (response.success) {
-            state.config = response.data;
+            applyServerConfig(response.data);
 
-            // Aktualizuj UI
-            const config = response.data.config;
-
-            let versionText = config.gameVersion;
-            if (config.loaderType !== 'vanilla') {
-                versionText += ` (${config.loaderType})`;
+            // Jeśli byliśmy offline - przywróć
+            if (state.isOffline) {
+                state.isOffline = false;
+                window.isOffline = false;
+                removeOfflineIndicator();
+                updateOfflineUI();
             }
-            elements.gameVersion.textContent = versionText;
-
-            // Liczba modów
-            const modsFromMods = response.data.mods?.length || 0;
-            const modsFromFiles = response.data.files?.filter(f => f.type === 'mod').length || 0;
-            const modsCount = Math.max(modsFromMods, modsFromFiles);
-            if (elements.modsCount) {
-                elements.modsCount.textContent = modsCount;
-            }
-
-            // Serwery
-            state.servers = response.data.servers || [];
-
-            // Przywróć zapisany wybór serwera
-            const savedServerId = await window.electronAPI?.getStore('selectedServerId');
-            if (savedServerId && state.servers.find(s => s.id === savedServerId)) {
-                state.selectedServerId = savedServerId;
-            } else {
-                // Wybierz domyślny serwer
-                const defaultServer = state.servers.find(s => s.isDefault) || state.servers[0];
-                state.selectedServerId = defaultServer?.id || null;
-            }
-
-            // Renderuj listę serwerów
-            renderServerList();
-
-            // Wyświetl powiadomienia
-            displayBroadcasts(response.data.broadcasts);
-
-            // Pobierz statusy serwerów
-            loadAllServerStatuses();
-
-            // Maintenance check
-            state.serverOnline = !config.maintenanceMode;
-            updateUserUI();
         }
     } catch (error) {
         console.error('Błąd ładowania konfiguracji:', error);
+
+        // Próba załadowania z cache (electron-store) jeśli offline
+        try {
+            const cachedResult = await window.electronAPI?.getCachedConfig();
+            if (cachedResult && cachedResult.success && cachedResult.data) {
+                console.log('[Offline] Ładowanie konfiguracji z cache');
+                const cachedData = cachedResult.data.data || cachedResult.data;
+                applyServerConfig(cachedData);
+                state.isOffline = true;
+                window.isOffline = true;
+                showOfflineIndicator();
+                updateOfflineUI();
+                return;
+            }
+        } catch (cacheError) {
+            console.warn('Nie udało się załadować konfiguracji z cache:', cacheError);
+        }
+
         if (elements.serverList) {
             elements.serverList.innerHTML = '<div class="server-list-empty">Brak połączenia z serwerem API</div>';
         }
@@ -636,6 +641,58 @@ async function loadServerConfig() {
 
         showToast('Nie można połączyć z serwerem', 'error');
     }
+}
+
+/**
+ * Aplikuje dane konfiguracyjne serwera do UI
+ */
+async function applyServerConfig(data) {
+    state.config = data;
+
+    // Aktualizuj UI
+    const config = data.config;
+
+    let versionText = config.gameVersion;
+    if (config.loaderType !== 'vanilla') {
+        versionText += ` (${config.loaderType})`;
+    }
+    elements.gameVersion.textContent = versionText;
+
+    // Liczba modów
+    const modsFromMods = data.mods?.length || 0;
+    const modsFromFiles = data.files?.filter(f => f.type === 'mod').length || 0;
+    const modsCount = Math.max(modsFromMods, modsFromFiles);
+    if (elements.modsCount) {
+        elements.modsCount.textContent = modsCount;
+    }
+
+    // Serwery
+    state.servers = data.servers || [];
+
+    // Przywróć zapisany wybór serwera
+    const savedServerId = await window.electronAPI?.getStore('selectedServerId');
+    if (savedServerId && state.servers.find(s => s.id === savedServerId)) {
+        state.selectedServerId = savedServerId;
+    } else {
+        // Wybierz domyślny serwer
+        const defaultServer = state.servers.find(s => s.isDefault) || state.servers[0];
+        state.selectedServerId = defaultServer?.id || null;
+    }
+
+    // Renderuj listę serwerów
+    renderServerList();
+
+    // Wyświetl powiadomienia
+    displayBroadcasts(data.broadcasts);
+
+    // Pobierz statusy serwerów (tylko jeśli online)
+    if (!state.isOffline) {
+        loadAllServerStatuses();
+    }
+
+    // Maintenance check
+    state.serverOnline = !config.maintenanceMode;
+    updateUserUI();
 }
 
 /**
@@ -1818,6 +1875,152 @@ async function handleDownloadUpdate() {
  */
 function handleInstallUpdate() {
     window.electronAPI?.installUpdate();
+}
+
+// ============================================
+// TRYB OFFLINE
+// ============================================
+
+/**
+ * Inicjalizuje obsługę trybu offline
+ */
+function initOfflineMode() {
+    // Nasłuchuj eventów zmiany statusu sieci z API client
+    window.addEventListener('online-status-changed', (event) => {
+        const { online, wasOffline } = event.detail;
+        state.isOffline = !online;
+
+        if (online && wasOffline) {
+            showToast('Połączenie przywrócone!', 'success');
+            removeOfflineIndicator();
+            // Odśwież dane po powrocie online
+            loadServerConfig();
+            loadNews();
+            loadAllServerStatuses();
+        } else if (!online) {
+            showToast('Brak połączenia z serwerem. Tryb offline.', 'warning');
+            showOfflineIndicator();
+        }
+
+        updateOfflineUI();
+    });
+
+    // Nasłuchuj natywnych eventów przeglądarki
+    window.addEventListener('online', () => {
+        if (state.isOffline) {
+            // Spróbuj ponownie połączyć się z API
+            loadServerConfig();
+        }
+    });
+
+    window.addEventListener('offline', () => {
+        if (!state.isOffline) {
+            state.isOffline = true;
+            window.isOffline = true;
+            showToast('Brak połączenia z internetem. Tryb offline.', 'warning');
+            showOfflineIndicator();
+            updateOfflineUI();
+        }
+    });
+}
+
+/**
+ * Wyświetla wskaźnik trybu offline w UI
+ */
+function showOfflineIndicator() {
+    // Dodaj wskaźnik offline do paska tytułowego jeśli nie istnieje
+    if (!document.getElementById('offline-indicator')) {
+        const indicator = document.createElement('div');
+        indicator.id = 'offline-indicator';
+        indicator.className = 'offline-indicator';
+        indicator.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <line x1="1" y1="1" x2="23" y2="23"/>
+                <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/>
+                <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/>
+                <path d="M10.71 5.05A16 16 0 0 1 22.56 9"/>
+                <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/>
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+                <line x1="12" y1="20" x2="12.01" y2="20"/>
+            </svg>
+            <span>Tryb offline</span>
+        `;
+        indicator.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 12px;background:rgba(239,68,68,0.2);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#ef4444;font-size:12px;font-weight:500;position:fixed;top:8px;right:140px;z-index:9999;-webkit-app-region:no-drag;';
+        const titlebar = document.getElementById('titlebar');
+        if (titlebar) {
+            titlebar.appendChild(indicator);
+        } else {
+            document.body.appendChild(indicator);
+        }
+    }
+}
+
+/**
+ * Usuwa wskaźnik trybu offline z UI
+ */
+function removeOfflineIndicator() {
+    const indicator = document.getElementById('offline-indicator');
+    if (indicator) {
+        indicator.remove();
+    }
+}
+
+/**
+ * Aktualizuje UI w zależności od statusu online/offline
+ */
+function updateOfflineUI() {
+    if (state.isOffline) {
+        // Wyłącz przyciski wymagające sieci
+        const linkRegister = document.getElementById('link-register');
+        if (linkRegister) {
+            linkRegister.style.pointerEvents = 'none';
+            linkRegister.style.opacity = '0.5';
+            linkRegister.title = 'Niedostępne w trybie offline';
+        }
+
+        // Aktualizuj przycisk graj - pozwól grać jeśli pliki są pobrane
+        if (state.isLoggedIn && state.config) {
+            elements.btnPlay.disabled = false;
+            elements.playSubtext.textContent = 'Tryb offline (pliki z cache)';
+        }
+    } else {
+        // Przywróć normalny stan
+        const linkRegister = document.getElementById('link-register');
+        if (linkRegister) {
+            linkRegister.style.pointerEvents = '';
+            linkRegister.style.opacity = '';
+            linkRegister.title = '';
+        }
+        updateUserUI();
+    }
+}
+
+// ============================================
+// CRASH REPORTS - SPRAWDZANIE PRZY STARCIE
+// ============================================
+
+/**
+ * Sprawdza czy są niedawne raporty o awariach i pokazuje powiadomienie
+ */
+async function checkRecentCrashReports() {
+    try {
+        const reports = await window.electronAPI?.crashReporter?.getReports();
+        if (reports && reports.length > 0) {
+            // Sprawdź czy najnowszy raport jest z ostatnich 24 godzin
+            const latestReport = reports[0];
+            if (latestReport.timestamp) {
+                const reportTime = new Date(latestReport.timestamp).getTime();
+                const now = Date.now();
+                const hoursSince = (now - reportTime) / (1000 * 60 * 60);
+
+                if (hoursSince < 24) {
+                    showToast('Wykryto raport z awarii. Sprawdz w ustawieniach.', 'warning');
+                }
+            }
+        }
+    } catch (error) {
+        console.warn('Blad sprawdzania raportow o awariach:', error);
+    }
 }
 
 // Odświeżaj konfigurację co 5 minut

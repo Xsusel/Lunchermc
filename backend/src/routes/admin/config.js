@@ -5,10 +5,15 @@
 import { Router } from 'express';
 import { body, validationResult } from 'express-validator';
 import { GameConfig, ActivityLog } from '../../models/index.js';
+import { requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getClientIp } from '../../utils/helpers.js';
 
 const router = Router();
+
+// Wszystkie trasy konfiguracji wymagają roli admin
+router.use('/config', requireRole('admin'));
+router.use('/config/*', requireRole('admin'));
 
 /**
  * GET /api/admin/config

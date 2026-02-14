@@ -7,6 +7,9 @@
  * - Różne typy powiadomień
  */
 import { WebSocketServer } from 'ws';
+import { createLogger } from './logger.js';
+
+const log = createLogger('WebSocket');
 
 class WebSocketManager {
     constructor() {
@@ -14,6 +17,11 @@ class WebSocketManager {
         this.clients = new Map(); // Map<ws, ClientInfo>
         this.heartbeatInterval = null;
         this.HEARTBEAT_INTERVAL_MS = 30000; // 30 sekund
+
+        // Rate limiting per client
+        this.RATE_LIMIT_WINDOW_MS = 10000; // 10 sekund
+        this.RATE_LIMIT_MAX_MESSAGES = 30; // max 30 wiadomości na okno
+        this.MAX_MESSAGE_SIZE = 4096; // max 4KB per message
 
         // Typy powiadomień
         this.NotificationTypes = {
@@ -41,7 +49,7 @@ class WebSocketManager {
         // Uruchom heartbeat
         this.startHeartbeat();
 
-        console.log(`[WebSocket] Manager zainicjalizowany na ścieżce: ${path}`);
+        log.info('Manager zainicjalizowany', { path });
     }
 
     /**
@@ -61,12 +69,16 @@ class WebSocketManager {
             subscriptions: new Set(['broadcast']), // Domyślnie subskrybuje broadcasts
             userId: null,
             username: null,
-            isAlive: true
+            isAlive: true,
+            // Rate limiting
+            messageCount: 0,
+            rateLimitWindowStart: Date.now(),
+            rateLimitWarnings: 0
         };
 
         this.clients.set(ws, clientInfo);
 
-        console.log(`[WebSocket] Nowe połączenie: ${clientId} z ${clientIp} (${this.clients.size} klientów)`);
+        log.info('Nowe połączenie', { clientId, clientIp, totalClients: this.clients.size });
 
         // Wyślij potwierdzenie
         this.send(ws, {
@@ -93,15 +105,61 @@ class WebSocketManager {
         // Obsługa zamknięcia
         ws.on('close', () => {
             const client = this.clients.get(ws);
-            console.log(`[WebSocket] Rozłączono: ${client?.id || 'unknown'}`);
+            log.info('Rozłączono', { clientId: client?.id || 'unknown' });
             this.clients.delete(ws);
         });
 
         // Obsługa błędów
         ws.on('error', (error) => {
-            console.error('[WebSocket] Błąd:', error);
+            log.error('Błąd połączenia', error);
             this.clients.delete(ws);
         });
+    }
+
+    /**
+     * Sprawdza rate limit per klient
+     * @returns {boolean} true jeśli wiadomość jest dozwolona
+     */
+    checkRateLimit(ws, client, dataSize) {
+        // Sprawdź rozmiar wiadomości
+        if (dataSize > this.MAX_MESSAGE_SIZE) {
+            this.send(ws, {
+                type: this.NotificationTypes.ERROR,
+                data: { message: 'Wiadomość zbyt duża' }
+            });
+            return false;
+        }
+
+        const now = Date.now();
+
+        // Resetuj okno jeśli minęło
+        if (now - client.rateLimitWindowStart > this.RATE_LIMIT_WINDOW_MS) {
+            client.messageCount = 0;
+            client.rateLimitWindowStart = now;
+        }
+
+        client.messageCount++;
+
+        // Sprawdź limit
+        if (client.messageCount > this.RATE_LIMIT_MAX_MESSAGES) {
+            client.rateLimitWarnings++;
+
+            // Po 3 ostrzeżeniach rozłączamy
+            if (client.rateLimitWarnings >= 3) {
+                log.warn('Klient rozłączony za rate limit', { clientId: client.id, ip: client.ip });
+                ws.close(1008, 'Rate limit exceeded');
+                this.clients.delete(ws);
+                return false;
+            }
+
+            this.send(ws, {
+                type: this.NotificationTypes.ERROR,
+                data: { message: 'Zbyt wiele wiadomości - zwolnij', warning: client.rateLimitWarnings }
+            });
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -109,10 +167,14 @@ class WebSocketManager {
      */
     handleMessage(ws, data) {
         try {
-            const message = JSON.parse(data.toString());
             const client = this.clients.get(ws);
-
             if (!client) return;
+
+            // Rate limiting
+            const dataStr = data.toString();
+            if (!this.checkRateLimit(ws, client, dataStr.length)) return;
+
+            const message = JSON.parse(dataStr);
 
             switch (message.type) {
                 case 'ping':
@@ -157,10 +219,10 @@ class WebSocketManager {
                     break;
 
                 default:
-                    console.log(`[WebSocket] Nieznany typ wiadomości: ${message.type}`);
+                    log.debug('Nieznany typ wiadomości', { type: message.type });
             }
         } catch (error) {
-            console.error('[WebSocket] Błąd parsowania wiadomości:', error);
+            log.error('Błąd parsowania wiadomości', error);
         }
     }
 
@@ -196,7 +258,7 @@ class WebSocketManager {
             }
         });
 
-        console.log(`[WebSocket] Broadcast "${type}" na kanał "${channel}" - ${sent} klientów`);
+        log.debug('Broadcast wysłany', { type, channel, clientsNotified: sent });
         return sent;
     }
 
@@ -266,7 +328,7 @@ class WebSocketManager {
         this.heartbeatInterval = setInterval(() => {
             this.clients.forEach((clientInfo, ws) => {
                 if (!clientInfo.isAlive) {
-                    console.log(`[WebSocket] Usuwanie nieaktywnego klienta: ${clientInfo.id}`);
+                    log.info('Usuwanie nieaktywnego klienta', { clientId: clientInfo.id });
                     ws.terminate();
                     this.clients.delete(ws);
                     return;
@@ -277,7 +339,7 @@ class WebSocketManager {
             });
         }, this.HEARTBEAT_INTERVAL_MS);
 
-        console.log('[WebSocket] Heartbeat uruchomiony');
+        log.info('Heartbeat uruchomiony');
     }
 
     /**
@@ -348,7 +410,7 @@ class WebSocketManager {
             ws.close(1000, 'Serwer jest zamykany');
         });
         this.clients.clear();
-        console.log('[WebSocket] Wszystkie połączenia zamknięte');
+        log.info('Wszystkie połączenia zamknięte');
     }
 }
 

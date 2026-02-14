@@ -5,10 +5,15 @@
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import { Server, ActivityLog } from '../../models/index.js';
+import { requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getClientIp } from '../../utils/helpers.js';
 
 const router = Router();
+
+// Wszystkie trasy serwerów wymagają roli admin
+router.use('/servers', requireRole('admin'));
+router.use('/servers/*', requireRole('admin'));
 
 /**
  * GET /api/admin/servers

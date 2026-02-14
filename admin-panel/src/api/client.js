@@ -123,6 +123,20 @@ export const usersApi = {
     }
 };
 
+export const adminsApi = {
+    // Lista administratorów
+    getAll: async () => {
+        const response = await api.get('/admin/admins');
+        return response.data;
+    },
+
+    // Zmiana roli administratora
+    setRole: async (id, role) => {
+        const response = await api.post(`/admin/admins/${id}/role`, { role });
+        return response.data;
+    }
+};
+
 export const configApi = {
     // Pobieranie konfiguracji
     get: async () => {
@@ -414,6 +428,160 @@ export const systemApi = {
     // Lista backupow
     getBackups: async () => {
         const response = await api.get('/admin/system/backups');
+        return response.data;
+    },
+
+    // Przywracanie backupu
+    restoreBackup: async (filename) => {
+        const response = await api.post(`/admin/system/restore/${encodeURIComponent(filename)}`);
+        return response.data;
+    },
+
+    // Usuwanie backupu
+    deleteBackup: async (filename) => {
+        const response = await api.delete(`/admin/system/backup/${encodeURIComponent(filename)}`);
+        return response.data;
+    },
+
+    // Pobieranie backupu (zwraca URL do pobrania)
+    downloadBackup: (filename) => {
+        const token = localStorage.getItem('adminToken');
+        return `${API_URL}/admin/system/backup/${encodeURIComponent(filename)}/download?token=${token}`;
+    }
+};
+
+export const rulesApi = {
+    // Lista wszystkich wersji regulaminu
+    getAll: async () => {
+        const response = await api.get('/admin/rules');
+        return response.data;
+    },
+
+    // Szczegóły regulaminu
+    getById: async (id) => {
+        const response = await api.get(`/admin/rules/${id}`);
+        return response.data;
+    },
+
+    // Aktywny regulamin
+    getActive: async () => {
+        const response = await api.get('/admin/rules/active');
+        return response.data;
+    },
+
+    // Statystyki akceptacji
+    getStats: async (rulesId = null) => {
+        const url = rulesId ? `/admin/rules/stats?rulesId=${rulesId}` : '/admin/rules/stats';
+        const response = await api.get(url);
+        return response.data;
+    },
+
+    // Tworzenie regulaminu
+    create: async (data) => {
+        const response = await api.post('/admin/rules', data);
+        return response.data;
+    },
+
+    // Aktualizacja regulaminu
+    update: async (id, data) => {
+        const response = await api.put(`/admin/rules/${id}`, data);
+        return response.data;
+    },
+
+    // Usuwanie regulaminu
+    delete: async (id) => {
+        const response = await api.delete(`/admin/rules/${id}`);
+        return response.data;
+    },
+
+    // Aktywacja regulaminu
+    activate: async (id) => {
+        const response = await api.post(`/admin/rules/${id}/activate`);
+        return response.data;
+    },
+
+    // Toggle (aktywacja/dezaktywacja)
+    toggle: async (id) => {
+        const response = await api.post(`/admin/rules/${id}/activate`);
+        return response.data;
+    },
+
+    // Reset akceptacji
+    resetAcceptances: async (id) => {
+        const response = await api.post(`/admin/rules/${id}/reset-acceptances`);
+        return response.data;
+    },
+
+    // Lista akceptacji
+    getAcceptances: async (id, limit = 100, offset = 0) => {
+        const response = await api.get(`/admin/rules/${id}/acceptances?limit=${limit}&offset=${offset}`);
+        return response.data;
+    }
+};
+
+export const newsApi = {
+    // Lista wszystkich wiadomości
+    getAll: async (options = {}) => {
+        const params = new URLSearchParams();
+        if (options.limit) params.append('limit', options.limit);
+        if (options.offset) params.append('offset', options.offset);
+        if (options.type) params.append('type', options.type);
+        if (options.publishedOnly) params.append('publishedOnly', 'true');
+        const response = await api.get(`/admin/news?${params.toString()}`);
+        return response.data;
+    },
+
+    // Szczegóły wiadomości
+    getById: async (id) => {
+        const response = await api.get(`/admin/news/${id}`);
+        return response.data;
+    },
+
+    // Statystyki
+    getStats: async () => {
+        const response = await api.get('/admin/news/stats');
+        return response.data;
+    },
+
+    // Typy wiadomości
+    getTypes: async () => {
+        const response = await api.get('/admin/news/types');
+        return response.data;
+    },
+
+    // Tworzenie wiadomości
+    create: async (data) => {
+        const response = await api.post('/admin/news', data);
+        return response.data;
+    },
+
+    // Aktualizacja wiadomości
+    update: async (id, data) => {
+        const response = await api.put(`/admin/news/${id}`, data);
+        return response.data;
+    },
+
+    // Usuwanie wiadomości
+    delete: async (id) => {
+        const response = await api.delete(`/admin/news/${id}`);
+        return response.data;
+    },
+
+    // Publikacja
+    publish: async (id) => {
+        const response = await api.post(`/admin/news/${id}/publish`);
+        return response.data;
+    },
+
+    // Wycofanie publikacji
+    unpublish: async (id) => {
+        const response = await api.post(`/admin/news/${id}/unpublish`);
+        return response.data;
+    },
+
+    // Przypnij/odepnij
+    togglePinned: async (id) => {
+        const response = await api.post(`/admin/news/${id}/pin`);
         return response.data;
     }
 };

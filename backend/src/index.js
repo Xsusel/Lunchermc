@@ -19,9 +19,13 @@ import versionsRoutes from './routes/versions.js';
 import filesRoutes from './routes/files.js';
 import { apiLimiter, errorHandler, notFoundHandler } from './middleware/index.js';
 import { ensureDir, getUploadsPath, getModsPath } from './utils/helpers.js';
-import { startAutoBackup, stopAutoBackup } from './utils/backup.js';
+import { startAutoBackup, stopAutoBackup, startLogRetention, stopLogRetention } from './utils/backup.js';
 import wsManager from './utils/wsManager.js';
 import { ScheduledMaintenance, Server } from './models/index.js';
+import { createLogger } from './utils/logger.js';
+import { runMigrations } from './config/migrations.js';
+
+const log = createLogger('Server');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,7 +44,27 @@ const server = http.createServer(app);
 // Bezpieczeństwo - nagłówki HTTP
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
-    contentSecurityPolicy: false // Wyłączamy dla panelu admina
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:', 'blob:'],
+            connectSrc: ["'self'", 'ws:', 'wss:'],
+            fontSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            frameSrc: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+            upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null
+        }
+    },
+    hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true
+    },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
 }));
 
 // CORS - pozwalamy na żądania z panelu i launchera
@@ -82,6 +106,9 @@ ensureDir(path.join(getUploadsPath(), 'configs'));
 ensureDir(path.join(getUploadsPath(), 'skins'));
 ensureDir(path.join(getUploadsPath(), 'capes'));
 ensureDir(path.join(__dirname, '../data'));
+
+// Uruchom migracje bazy danych
+runMigrations();
 
 // Inicjalizacja tabeli serwerów (auto-tworzenie + migracja)
 Server.initTable();
@@ -315,6 +342,9 @@ server.listen(PORT, () => {
     // Uruchom automatyczne backupy bazy danych
     startAutoBackup();
 
+    // Uruchom retencję logów i sesji
+    startLogRetention();
+
     // Uruchom scheduler dla scheduled maintenance
     startMaintenanceScheduler();
 });
@@ -362,11 +392,11 @@ function startMaintenanceScheduler() {
                 }
             }
         } catch (error) {
-            console.error('[MaintenanceScheduler] Błąd:', error);
+            log.error('MaintenanceScheduler: Błąd', error);
         }
     }, 60 * 1000); // Co minutę
 
-    console.log('[MaintenanceScheduler] Scheduler uruchomiony');
+    log.info('MaintenanceScheduler: Scheduler uruchomiony');
 }
 
 /**
@@ -376,7 +406,7 @@ function stopMaintenanceScheduler() {
     if (maintenanceSchedulerInterval) {
         clearInterval(maintenanceSchedulerInterval);
         maintenanceSchedulerInterval = null;
-        console.log('[MaintenanceScheduler] Scheduler zatrzymany');
+        log.info('MaintenanceScheduler: Scheduler zatrzymany');
     }
 }
 
@@ -385,10 +415,13 @@ function stopMaintenanceScheduler() {
 // ============================================
 
 const shutdown = () => {
-    console.log('\n🛑 Zatrzymywanie serwera...');
+    log.info('Zatrzymywanie serwera...');
 
     // Zatrzymaj automatyczne backupy
     stopAutoBackup();
+
+    // Zatrzymaj retencję logów
+    stopLogRetention();
 
     // Zatrzymaj scheduler maintenance
     stopMaintenanceScheduler();
@@ -397,13 +430,13 @@ const shutdown = () => {
     wsManager.closeAll();
 
     server.close(() => {
-        console.log('✅ Serwer został zatrzymany');
+        log.info('Serwer został zatrzymany');
         process.exit(0);
     });
 
     // Timeout na wymuszone zamknięcie
     setTimeout(() => {
-        console.error('⚠️ Wymuszanie zamknięcia...');
+        log.error('Wymuszanie zamknięcia...');
         process.exit(1);
     }, 10000);
 };

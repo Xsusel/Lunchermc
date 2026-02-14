@@ -15,7 +15,9 @@ import {
     X,
     Gamepad2,
     Server,
-    Download
+    Download,
+    ScrollText,
+    Newspaper
 } from 'lucide-react';
 
 // Elementy nawigacji
@@ -25,6 +27,8 @@ const navItems = [
     { path: '/mods', label: 'Mody', icon: Package },
     { path: '/config', label: 'Konfiguracja', icon: Settings },
     { path: '/broadcasts', label: 'Powiadomienia', icon: Bell },
+    { path: '/rules', label: 'Regulamin', icon: ScrollText },
+    { path: '/news', label: 'Aktualnosci', icon: Newspaper },
     { path: '/logs', label: 'Logi', icon: FileText },
     { path: '/launcher-versions', label: 'Wersje Launchera', icon: Download },
     { path: '/system', label: 'System', icon: Server }

@@ -8,7 +8,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { Mod, ActivityLog } from '../../models/index.js';
-import { authenticateAdmin } from '../../middleware/index.js';
+import { authenticateAdmin, requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import {
     calculateSHA256, sanitizeFilename, isAllowedModFile,
@@ -16,6 +16,10 @@ import {
 } from '../../utils/helpers.js';
 
 const router = Router();
+
+// Wszystkie trasy modów wymagają roli admin
+router.use('/mods', requireRole('admin'));
+router.use('/mods/*', requireRole('admin'));
 
 // Konfiguracja multer dla uploadu plików
 const storage = multer.diskStorage({

@@ -195,6 +195,34 @@ export const optionalAuth = (req, res, next) => {
 };
 
 /**
+ * Middleware sprawdzający rolę administratora
+ * Wymaga wcześniejszego użycia authenticateAdmin
+ * @param {...string} roles - Dozwolone role (np. 'admin', 'moderator')
+ * @returns {function} Middleware Express
+ */
+export const requireRole = (...roles) => {
+    return (req, res, next) => {
+        if (!req.admin) {
+            return res.status(401).json({
+                success: false,
+                error: 'Wymagana autoryzacja administratora'
+            });
+        }
+
+        const adminRole = req.admin.role || 'admin';
+
+        if (!roles.includes(adminRole)) {
+            return res.status(403).json({
+                success: false,
+                error: 'Brak uprawnień do tej akcji. Wymagana rola: ' + roles.join(' lub ')
+            });
+        }
+
+        next();
+    };
+};
+
+/**
  * Generuje token JWT dla użytkownika
  * @param {object} user - Obiekt użytkownika
  * @param {string|null} ip - Adres IP klienta (opcjonalny, dla session-IP binding)

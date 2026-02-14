@@ -78,12 +78,26 @@ export const isValidUsername = (username) => {
 
 /**
  * Waliduje hasło
- * Minimum 6 znaków
+ * Minimum 8 znaków, wymaga: duża litera, mała litera, cyfra
  * @param {string} password - Hasło
- * @returns {boolean} Czy hasło jest poprawne
+ * @returns {{valid: boolean, error?: string}} Wynik walidacji
  */
 export const isValidPassword = (password) => {
-    return typeof password === 'string' && password.length >= 6;
+    if (typeof password !== 'string') return { valid: false, error: 'Hasło jest wymagane' };
+    if (password.length < 8) return { valid: false, error: 'Hasło musi mieć minimum 8 znaków' };
+    if (!/[A-Z]/.test(password)) return { valid: false, error: 'Hasło musi zawierać dużą literę' };
+    if (!/[a-z]/.test(password)) return { valid: false, error: 'Hasło musi zawierać małą literę' };
+    if (!/[0-9]/.test(password)) return { valid: false, error: 'Hasło musi zawierać cyfrę' };
+    return { valid: true };
+};
+
+/**
+ * Prosta walidacja hasła (kompatybilność wsteczna)
+ * @param {string} password
+ * @returns {boolean}
+ */
+export const isPasswordValid = (password) => {
+    return isValidPassword(password).valid;
 };
 
 /**

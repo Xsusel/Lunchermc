@@ -289,7 +289,7 @@ class GameManager {
     // ============================================
 
     /**
-     * Pobiera plik z obsługą wznawiania (HTTP Range)
+     * Pobiera plik z obsługą wznawiania (HTTP Range) i plikiem .progress
      */
     downloadFileWithResume(url, destPath, onProgress, maxRetries = 5) {
         return new Promise((resolve, reject) => {
@@ -303,13 +303,61 @@ class GameManager {
 
             // Sprawdź czy istnieje częściowo pobrany plik
             const partialPath = destPath + '.partial';
+            const progressPath = destPath + '.progress';
             let startByte = 0;
 
+            // Odczytaj stan z pliku .progress lub z rozmiaru pliku partial
             if (fs.existsSync(partialPath)) {
                 const stat = fs.statSync(partialPath);
                 startByte = stat.size;
-                console.log(`Resuming download from byte ${startByte}`);
+
+                // Sprawdź .progress file dla dodatkowych metadanych
+                if (fs.existsSync(progressPath)) {
+                    try {
+                        const progressData = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+                        // Użyj zapisanego rozmiaru tylko jeśli zgadza się z plikiem
+                        if (progressData.downloadedBytes && progressData.downloadedBytes <= stat.size) {
+                            startByte = stat.size;
+                        }
+                        console.log(`Resuming download from byte ${startByte} (progress file found, url: ${progressData.url || 'unknown'})`);
+                    } catch (e) {
+                        console.warn('Failed to read .progress file, using file size');
+                    }
+                } else {
+                    console.log(`Resuming download from byte ${startByte} (partial file found)`);
+                }
             }
+
+            /**
+             * Zapisuje postęp pobierania do pliku .progress
+             */
+            const saveProgress = (downloadedBytes, totalSize, attempt) => {
+                try {
+                    const progressData = {
+                        url: fullUrl,
+                        destPath: destPath,
+                        downloadedBytes: downloadedBytes,
+                        totalSize: totalSize,
+                        attempt: attempt,
+                        timestamp: Date.now(),
+                        filename: path.basename(destPath)
+                    };
+                    fs.writeFileSync(progressPath, JSON.stringify(progressData));
+                } catch (e) {
+                    // Nie blokuj pobierania z powodu błędu zapisu progress
+                }
+            };
+
+            /**
+             * Usuwa pliki .progress i .partial po zakończeniu
+             */
+            const cleanupProgressFile = () => {
+                try {
+                    if (fs.existsSync(progressPath)) {
+                        fs.unlinkSync(progressPath);
+                    }
+                } catch (e) {}
+            };
 
             const attemptDownload = (attempt) => {
                 const protocol = fullUrl.startsWith('https') ? https : http;
@@ -328,19 +376,25 @@ class GameManager {
                 const file = fs.createWriteStream(partialPath, { flags: fileFlags });
                 let downloadedBytes = startByte;
                 let lastProgressTime = Date.now();
+                let lastProgressSave = 0;
                 let totalSize = 0;
 
                 const cleanup = (removeFile = true) => {
                     try {
                         file.close();
-                        if (removeFile && fs.existsSync(partialPath)) {
-                            fs.unlinkSync(partialPath);
+                        if (removeFile) {
+                            if (fs.existsSync(partialPath)) {
+                                fs.unlinkSync(partialPath);
+                            }
+                            cleanupProgressFile();
                         }
                     } catch (e) {}
                 };
 
                 const retryOrFail = (error) => {
                     cleanup(false); // Nie usuwaj pliku - może być wznowiony
+                    // Zapisz postęp przed retry
+                    saveProgress(downloadedBytes, totalSize, attempt);
                     if (attempt < maxRetries) {
                         const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
                         console.log(`[RETRY ${attempt + 1}/${maxRetries}] ${path.basename(destPath)} - ${error.message}, waiting ${delay}ms`);
@@ -389,11 +443,20 @@ class GameManager {
                         totalSize = parseInt(response.headers['content-length'] || '0', 10) + startByte;
                     }
 
+                    // Zapisz początkowy progress
+                    saveProgress(downloadedBytes, totalSize, attempt);
+
                     response.on('data', (chunk) => {
                         downloadedBytes += chunk.length;
                         lastProgressTime = Date.now();
                         if (onProgress && totalSize > 0) {
                             onProgress(downloadedBytes, totalSize);
+                        }
+
+                        // Zapisuj progress co 5 sekund (nie za często, żeby nie obciążać dysku)
+                        if (Date.now() - lastProgressSave > 5000) {
+                            lastProgressSave = Date.now();
+                            saveProgress(downloadedBytes, totalSize, attempt);
                         }
                     });
 
@@ -414,6 +477,8 @@ class GameManager {
                                         fs.unlinkSync(destPath);
                                     }
                                     fs.renameSync(partialPath, destPath);
+                                    // Usuń plik .progress po zakończeniu
+                                    cleanupProgressFile();
                                     resolve(destPath);
                                 }
                             } catch (e) {
@@ -423,6 +488,7 @@ class GameManager {
                                         fs.unlinkSync(destPath);
                                     }
                                     fs.renameSync(partialPath, destPath);
+                                    cleanupProgressFile();
                                     resolve(destPath);
                                 } catch (e2) {
                                     reject(e2);
@@ -1217,20 +1283,28 @@ class GameManager {
     }
 
     /**
-     * Pobiera pojedynczy plik z weryfikacją (ze wsparciem wznawiania)
+     * Pobiera pojedynczy plik z weryfikacją (ze wsparciem wznawiania i SHA256)
      */
     async downloadAndVerifyFile(file, destPath, onProgress) {
         // Użyj wznawiania pobierania dla lepszego UX
         await this.downloadFileWithResume(file.url, destPath, onProgress);
 
-        // Weryfikuj hash po pobraniu
+        // Weryfikuj SHA256 hash po pobraniu
         if (file.sha256) {
             const downloadedHash = await this.calculateFileHash(destPath);
             if (downloadedHash !== file.sha256) {
-                fs.unlinkSync(destPath);
-                throw new Error('Hash verification failed');
+                console.error(`SHA256 mismatch for ${path.basename(destPath)}: expected ${file.sha256}, got ${downloadedHash}`);
+                // Usuń wadliwy plik i pliki towarzyszące
+                try { fs.unlinkSync(destPath); } catch (e) {}
+                try { fs.unlinkSync(destPath + '.progress'); } catch (e) {}
+                try { fs.unlinkSync(destPath + '.partial'); } catch (e) {}
+                throw new Error(`Hash verification failed for ${path.basename(destPath)}`);
             }
+            console.log(`SHA256 verified for ${path.basename(destPath)}`);
         }
+
+        // Upewnij się że .progress jest usunięty po pomyślnej weryfikacji
+        try { fs.unlinkSync(destPath + '.progress'); } catch (e) {}
 
         return true;
     }
@@ -1707,6 +1781,11 @@ class GameManager {
                 this.gameProcess = await launcher.launch(launchOpts);
 
                 if (this.gameProcess) {
+                    // Przekaz proces gry do crash reportera (jeśli dostępny)
+                    if (this.crashReporter) {
+                        this.crashReporter.attachGameProcess(this.gameProcess, this.currentGameConfig);
+                    }
+
                     // Zbieraj logi z stdout/stderr
                     if (this.gameProcess.stdout) {
                         this.gameProcess.stdout.on('data', (data) => {
@@ -1895,63 +1974,8 @@ class GameManager {
             };
         });
 
-        // Pobierz ostatnie raporty o crashach
-        ipcMain.handle('get-crash-reports', async () => {
-            const gamePath = this.getGamePath();
-            const crashDir = path.join(gamePath, 'crash-reports', 'launcher');
-
-            if (!fs.existsSync(crashDir)) {
-                return [];
-            }
-
-            try {
-                const files = fs.readdirSync(crashDir)
-                    .filter(f => f.endsWith('.json'))
-                    .sort()
-                    .reverse()
-                    .slice(0, 10); // Ostatnie 10
-
-                return files.map(filename => {
-                    const filepath = path.join(crashDir, filename);
-                    try {
-                        const content = fs.readFileSync(filepath, 'utf8');
-                        const report = JSON.parse(content);
-                        return {
-                            filename,
-                            filepath,
-                            timestamp: report.timestamp,
-                            crashType: report.crash?.type,
-                            gameVersion: report.game?.version
-                        };
-                    } catch (e) {
-                        return { filename, filepath, error: 'Failed to parse' };
-                    }
-                });
-            } catch (e) {
-                return [];
-            }
-        });
-
-        // Odczytaj konkretny raport o crashu
-        ipcMain.handle('read-crash-report', async (event, filepath) => {
-            try {
-                const content = fs.readFileSync(filepath, 'utf8');
-                return JSON.parse(content);
-            } catch (e) {
-                return null;
-            }
-        });
-
-        // Otwórz folder z crash reportami
-        ipcMain.handle('open-crash-reports-folder', async () => {
-            const gamePath = this.getGamePath();
-            const crashDir = path.join(gamePath, 'crash-reports', 'launcher');
-            this.ensureDir(crashDir);
-
-            const { shell } = require('electron');
-            shell.openPath(crashDir);
-            return crashDir;
-        });
+        // Crash reports handled by CrashReporter module (crashReporter.js)
+        // IPC handlers: get-crash-reports, get-crash-report, open-crash-reports-folder
     }
 }
 

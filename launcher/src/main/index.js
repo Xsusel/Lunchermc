@@ -6,6 +6,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 const GameManager = require('./gameManager');
+const CrashReporter = require('./crashReporter');
 const { getChangelog, getLatestChangelog } = require('./changelog');
 const { getAvailableThemes, getTheme, getThemeVariables } = require('./themes');
 
@@ -64,6 +65,7 @@ const store = new Store({
 // Referencja do głównego okna
 let mainWindow = null;
 let gameManager = null;
+let crashReporter = null;
 
 // Ścieżka do danych gry
 const getDefaultGamePath = () => {
@@ -119,9 +121,16 @@ function createWindow() {
         gameManager = null;
     });
 
+    // Inicjalizuj CrashReporter
+    crashReporter = new CrashReporter(store, mainWindow);
+    crashReporter.initialize();
+
     // Inicjalizuj GameManager
     gameManager = new GameManager(store, mainWindow);
     gameManager.registerIPCHandlers();
+
+    // Przekaz crash reporter do game managera (aby moc podpiac sie pod proces gry)
+    gameManager.crashReporter = crashReporter;
 }
 
 // ============================================
@@ -420,6 +429,45 @@ if (autoUpdater) {
         console.error('Auto-update error:', error);
     });
 }
+
+// ============================================
+// OFFLINE MODE / ONLINE STATUS
+// ============================================
+
+// Sprawdza czy API jest dostępne (ping)
+ipcMain.handle('check-online-status', async () => {
+    try {
+        const apiUrl = store.get('apiUrl') || 'https://mc.xsus.pl';
+        const url = `${apiUrl}/api/launcher/config`;
+        const response = await fetchJson(url);
+
+        if (response && response.success) {
+            // Cache successful config response
+            store.set('cachedConfig', response);
+            store.set('cachedConfigTimestamp', Date.now());
+            return { online: true, config: response };
+        }
+        return { online: false, error: 'Invalid response' };
+    } catch (error) {
+        return { online: false, error: error.message };
+    }
+});
+
+// Zwraca ostatnio zakeszowaną konfigurację (dla trybu offline)
+ipcMain.handle('get-cached-config', () => {
+    const cachedConfig = store.get('cachedConfig');
+    const cachedTimestamp = store.get('cachedConfigTimestamp');
+
+    if (cachedConfig) {
+        return {
+            success: true,
+            data: cachedConfig,
+            timestamp: cachedTimestamp,
+            fromCache: true
+        };
+    }
+    return { success: false, error: 'No cached config available' };
+});
 
 // ============================================
 // DODATKOWE HANDLERY IPC
