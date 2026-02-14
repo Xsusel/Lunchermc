@@ -1,13 +1,15 @@
 /**
  * Trasy zarządzania serwerami
- * /servers CRUD, toggle, reorder, mods assignment, game config, clear files
+ * /servers CRUD, toggle, reorder, mods assignment, game config, clear files, FTP sync
  */
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
+import fs from 'fs';
+import path from 'path';
 import { Server, Mod, ActivityLog } from '../../models/index.js';
 import { requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
-import { getClientIp } from '../../utils/helpers.js';
+import { getClientIp, getUploadsPath, ensureDir, calculateSHA256, isAllowedModFile } from '../../utils/helpers.js';
 
 const router = Router();
 
@@ -435,6 +437,149 @@ router.post('/servers/:id/clear-files',
         res.json({
             success: true,
             message: `Wyczyszczono wszystkie pliki i mody z serwera "${server.name}"`
+        });
+    })
+);
+
+// ============================================
+// PER-SERVER FTP SYNC
+// ============================================
+
+/**
+ * Zwraca ścieżkę do folderu modów serwera
+ */
+function getServerModsPath(serverId) {
+    return path.join(getUploadsPath(), 'servers', String(serverId), 'mods');
+}
+
+/**
+ * GET /api/admin/servers/:id/sync-info
+ * Informacje o folderze FTP serwera
+ */
+router.get('/servers/:id/sync-info',
+    [param('id').isInt()],
+    asyncHandler(async (req, res) => {
+        const id = parseInt(req.params.id);
+        const server = Server.getById(id);
+        if (!server) {
+            return res.status(404).json({ success: false, error: 'Serwer nie znaleziony' });
+        }
+
+        const serverModsPath = getServerModsPath(id);
+        ensureDir(serverModsPath);
+
+        let filesOnDisk = [];
+        try {
+            filesOnDisk = fs.readdirSync(serverModsPath).filter(f => isAllowedModFile(f));
+        } catch (e) {
+            // Directory might not exist yet
+        }
+
+        const assignedMods = Server.getMods(id);
+
+        res.json({
+            success: true,
+            data: {
+                path: serverModsPath,
+                relativePath: `uploads/servers/${id}/mods/`,
+                filesOnDisk: filesOnDisk.length,
+                assignedMods: assignedMods.length,
+                files: filesOnDisk
+            }
+        });
+    })
+);
+
+/**
+ * POST /api/admin/servers/:id/sync
+ * Synchronizuje mody z folderu FTP serwera
+ * Skanuje uploads/servers/{serverId}/mods/ i:
+ * 1. Dodaje nowe pliki .jar/.zip do bazy modów
+ * 2. Przypisuje je do tego serwera
+ * 3. Opcjonalnie: kopiuje plik do globalnego uploads/mods/ aby był dostępny do pobrania
+ */
+router.post('/servers/:id/sync',
+    [param('id').isInt()],
+    asyncHandler(async (req, res) => {
+        const id = parseInt(req.params.id);
+        const server = Server.getById(id);
+        if (!server) {
+            return res.status(404).json({ success: false, error: 'Serwer nie znaleziony' });
+        }
+
+        const serverModsPath = getServerModsPath(id);
+        ensureDir(serverModsPath);
+
+        // Globalny folder modów (do kopiowania)
+        const globalModsPath = path.join(getUploadsPath(), 'mods');
+        ensureDir(globalModsPath);
+
+        let filesOnDisk;
+        try {
+            filesOnDisk = fs.readdirSync(serverModsPath).filter(f => isAllowedModFile(f));
+        } catch (e) {
+            return res.json({
+                success: true,
+                message: 'Folder serwera jest pusty',
+                data: { added: 0, skipped: 0, errors: [] }
+            });
+        }
+
+        const results = { added: 0, skipped: 0, assigned: 0, errors: [] };
+
+        for (const filename of filesOnDisk) {
+            try {
+                const serverFilePath = path.join(serverModsPath, filename);
+
+                // Sprawdź czy mod już istnieje w bazie
+                let mod = Mod.findByFilename(filename);
+
+                if (!mod) {
+                    // Oblicz SHA256
+                    const sha256 = await calculateSHA256(serverFilePath);
+                    const stats = fs.statSync(serverFilePath);
+
+                    // Skopiuj do globalnego folderu modów (jeśli nie istnieje)
+                    const globalFilePath = path.join(globalModsPath, filename);
+                    if (!fs.existsSync(globalFilePath)) {
+                        fs.copyFileSync(serverFilePath, globalFilePath);
+                    }
+
+                    // Utwórz wpis w bazie
+                    mod = Mod.create({
+                        name: filename.replace(/\.[^.]+$/, ''),
+                        filename,
+                        url: `/api/download/mods/${filename}`,
+                        sha256,
+                        file_size: stats.size,
+                        is_required: true,
+                        mod_type: 'mod',
+                        description: `Zsynchronizowano z FTP serwera "${server.name}"`
+                    });
+                    results.added++;
+                } else {
+                    results.skipped++;
+                }
+
+                // Przypisz mod do tego serwera (jeśli jeszcze nie jest)
+                Server.assignMod(id, mod.id);
+                results.assigned++;
+
+            } catch (err) {
+                results.errors.push({ filename, error: err.message });
+            }
+        }
+
+        ActivityLog.logAdminAction('server_ftp_sync', {
+            serverId: id,
+            serverName: server.name,
+            ...results
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: `Synchronizacja serwera "${server.name}": dodano ${results.added}, pominięto ${results.skipped}, przypisano ${results.assigned}`,
+            data: results
         });
     })
 );

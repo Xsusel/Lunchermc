@@ -9,7 +9,8 @@ import {
     Settings, Server, Cpu, Save, AlertTriangle,
     Loader2, RefreshCw, Gamepad2, Plus, Trash2, Edit3,
     GripVertical, Power, Star, X, Package, Eraser,
-    ChevronDown, ChevronRight, Square, CheckSquare
+    ChevronDown, ChevronRight, Square, CheckSquare,
+    FolderSync, FolderOpen
 } from 'lucide-react';
 
 const MC_VERSIONS = [
@@ -54,6 +55,9 @@ function ConfigPage() {
     const [expandedServer, setExpandedServer] = useState(null);
     const [serverConfigForm, setServerConfigForm] = useState({});
     const [savingConfig, setSavingConfig] = useState(false);
+
+    // FTP Sync state
+    const [syncingServer, setSyncingServer] = useState(null);
 
     // Drag & Drop state
     const [draggedServer, setDraggedServer] = useState(null);
@@ -177,6 +181,26 @@ function ConfigPage() {
             loadServers();
         } catch (error) {
             toast.error('Błąd czyszczenia plików');
+        }
+    };
+
+    // === FTP Sync ===
+
+    const handleSyncServer = async (server) => {
+        setSyncingServer(server.id);
+        try {
+            const result = await serversApi.sync(server.id);
+            if (result.success) {
+                const d = result.data;
+                toast.success(
+                    `Sync "${server.name}": +${d.added} nowych, ${d.skipped} pominięto, ${d.assigned} przypisano`
+                );
+                loadServers();
+            }
+        } catch (error) {
+            toast.error('Błąd synchronizacji FTP');
+        } finally {
+            setSyncingServer(null);
         }
     };
 
@@ -440,6 +464,18 @@ function ConfigPage() {
                                     >
                                         <Package className="w-4 h-4" />
                                     </button>
+                                    {/* FTP Sync button */}
+                                    <button
+                                        onClick={() => handleSyncServer(server)}
+                                        disabled={syncingServer === server.id}
+                                        className="p-2 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-green-400 transition-colors"
+                                        title={`Synchronizuj FTP (uploads/servers/${server.id}/mods/)`}
+                                    >
+                                        {syncingServer === server.id
+                                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                                            : <FolderSync className="w-4 h-4" />
+                                        }
+                                    </button>
                                     {/* Clear files button */}
                                     <button
                                         onClick={() => handleClearFiles(server)}
@@ -577,6 +613,20 @@ function ConfigPage() {
                                                 />
                                             )}
                                         </div>
+                                    </div>
+
+                                    {/* FTP Sync info */}
+                                    <div className="p-3 bg-mc-gray/30 rounded-lg border border-mc-gray">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <FolderOpen className="w-4 h-4 text-gray-400" />
+                                            <p className="text-sm font-medium text-gray-300">Folder FTP modów</p>
+                                        </div>
+                                        <p className="text-xs font-mono text-gray-400 select-all">
+                                            uploads/servers/{server.id}/mods/
+                                        </p>
+                                        <p className="text-xs text-gray-500 mt-1">
+                                            Wrzuć pliki .jar/.zip przez FTP do tego folderu, potem kliknij przycisk synchronizacji
+                                        </p>
                                     </div>
 
                                     <div className="flex justify-end">

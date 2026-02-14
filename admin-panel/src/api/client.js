@@ -234,6 +234,18 @@ export const serversApi = {
     clearFiles: async (id) => {
         const response = await api.post(`/admin/servers/${id}/clear-files`);
         return response.data;
+    },
+
+    // Informacje o folderze FTP serwera
+    getSyncInfo: async (id) => {
+        const response = await api.get(`/admin/servers/${id}/sync-info`);
+        return response.data;
+    },
+
+    // Synchronizuj mody z FTP serwera
+    sync: async (id) => {
+        const response = await api.post(`/admin/servers/${id}/sync`);
+        return response.data;
     }
 };
 
