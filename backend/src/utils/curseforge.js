@@ -201,43 +201,28 @@ export async function getModpackFiles(modId, fileId) {
 }
 
 /**
- * Extract mod list from a CurseForge modpack.
- * Tries multiple strategies:
- * 1. Uses `modules` field from the file API (contains projectId + fileId pairs)
- * 2. Falls back to downloading the modpack ZIP and reading manifest.json
+ * Download and parse a CurseForge modpack ZIP.
+ * Returns full manifest data (files, minecraft version, loader info)
+ * plus the ZIP buffer for extracting overrides.
+ *
+ * manifest.json structure:
+ *   minecraft.version - e.g. "1.21.1"
+ *   minecraft.modLoaders[0].id - e.g. "forge-47.2.0" or "neoforge-21.1.77"
+ *   files[] - { projectID, fileID, required }
+ *   overrides - name of overrides directory (usually "overrides")
  *
  * @param {number} modId - CurseForge modpack ID
  * @param {number} fileId - CurseForge modpack file ID
- * @returns {Promise<Array<{projectID: number, fileID: number}>>} List of mod references
+ * @returns {Promise<{manifest: object, zipBuffer: Buffer}>} Full manifest + ZIP buffer
  */
 export async function extractModpackManifest(modId, fileId) {
     if (!modId) throw new Error('modId is required');
     if (!fileId) throw new Error('fileId is required');
 
-    // Strategy 1: Check if file API returns modules with projectId + fileId
-    const fileData = await cfFetch(`/mods/${modId}/files/${fileId}`);
-    const file = fileData.data;
-
-    if (file.modules && file.modules.length > 0) {
-        // Some modpacks have modules with fingerprint-based resolution
-        // but we need projectID/fileID pairs - check if dependencies have them
-    }
-
-    // Strategy 2: Try dependencies field
-    if (file.dependencies && file.dependencies.length > 0) {
-        const modDeps = file.dependencies.filter(d => d.relationType === 3 || d.relationType === 6);
-        if (modDeps.length > 0 && modDeps.some(d => d.modId)) {
-            return modDeps.map(d => ({ projectID: d.modId, fileID: null }));
-        }
-    }
-
-    // Strategy 3: Download the modpack ZIP and read manifest.json
     const downloadUrl = await getFileDownloadUrl(modId, fileId);
     if (!downloadUrl) {
         throw new Error('Nie udało się pobrać URL modpacka');
     }
-
-    const { default: AdmZip } = await import('adm-zip');
 
     const response = await fetch(downloadUrl);
     if (!response.ok) {
@@ -245,8 +230,10 @@ export async function extractModpackManifest(modId, fileId) {
     }
 
     const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const zip = new AdmZip(buffer);
+    const zipBuffer = Buffer.from(arrayBuffer);
+
+    const { default: AdmZip } = await import('adm-zip');
+    const zip = new AdmZip(zipBuffer);
 
     // CurseForge modpacks contain manifest.json at root level
     const manifestEntry = zip.getEntry('manifest.json');
@@ -261,8 +248,45 @@ export async function extractModpackManifest(modId, fileId) {
         throw new Error('Manifest modpacka nie zawiera listy modów');
     }
 
-    // manifest.files contains: { projectID, fileID, required }
-    return manifest.files;
+    return { manifest, zipBuffer };
+}
+
+/**
+ * Parse loader type and version from CurseForge manifest modLoader ID.
+ * Examples: "forge-47.2.0", "neoforge-21.1.77", "fabric-0.15.3"
+ *
+ * @param {object} manifest - CurseForge modpack manifest
+ * @returns {{ loaderType: string, loaderVersion: string, gameVersion: string }}
+ */
+export function parseManifestLoaderInfo(manifest) {
+    const result = {
+        gameVersion: manifest.minecraft?.version || null,
+        loaderType: 'vanilla',
+        loaderVersion: null,
+    };
+
+    const modLoaders = manifest.minecraft?.modLoaders;
+    if (!modLoaders || modLoaders.length === 0) return result;
+
+    // Use the primary loader (first one, or the one marked as primary)
+    const primary = modLoaders.find(l => l.primary) || modLoaders[0];
+    const loaderId = primary.id || '';
+
+    if (loaderId.startsWith('forge-')) {
+        result.loaderType = 'forge';
+        result.loaderVersion = loaderId.replace('forge-', '');
+    } else if (loaderId.startsWith('neoforge-')) {
+        result.loaderType = 'neoforge';
+        result.loaderVersion = loaderId.replace('neoforge-', '');
+    } else if (loaderId.startsWith('fabric-')) {
+        result.loaderType = 'fabric';
+        result.loaderVersion = loaderId.replace('fabric-', '');
+    } else if (loaderId.startsWith('quilt-')) {
+        result.loaderType = 'quilt';
+        result.loaderVersion = loaderId.replace('quilt-', '');
+    }
+
+    return result;
 }
 
 /**
@@ -326,6 +350,7 @@ export default {
     getFileDownloadUrl,
     getModpackFiles,
     extractModpackManifest,
+    parseManifestLoaderInfo,
     searchModpacks,
     getCategories,
     getGameVersions,
