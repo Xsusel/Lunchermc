@@ -10,7 +10,7 @@
  */
 
 const CURSEFORGE_API_BASE = 'https://api.curseforge.com/v1';
-const MINECRAFT_GAME_ID = 432;
+export const MINECRAFT_GAME_ID = 432;
 const MODPACK_CLASS_ID = 4471;
 
 /**
