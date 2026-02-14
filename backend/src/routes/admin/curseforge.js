@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { Mod, ActivityLog } from '../../models/index.js';
+import { Mod, ActivityLog, Server } from '../../models/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import {
     calculateSHA256, sanitizeFilename,
@@ -231,7 +231,17 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
         curseforge_url: cfMod.links?.websiteUrl || null,
     });
 
-    // 9. Log the action
+    // 9. Auto-assign to all servers
+    try {
+        const allServers = Server.getAll();
+        for (const server of allServers) {
+            Server.assignMod(server.id, mod.id);
+        }
+    } catch (e) {
+        // Non-critical
+    }
+
+    // 10. Log the action
     ActivityLog.logAdminAction('curseforge_import_mod', {
         modId: mod.id,
         curseforgeId: modId,
@@ -378,6 +388,16 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 curseforge_file_id: depFile.id,
                 curseforge_url: depMod.links?.websiteUrl || null,
             });
+
+            // Auto-assign to all servers
+            try {
+                const allServers = Server.getAll();
+                for (const srv of allServers) {
+                    Server.assignMod(srv.id, newMod.id);
+                }
+            } catch (assignErr) {
+                // Non-critical
+            }
 
             results.imported.push({
                 id: newMod.id,

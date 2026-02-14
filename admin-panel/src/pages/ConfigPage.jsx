@@ -1,16 +1,17 @@
 /**
- * Strona konfiguracji gry
+ * Strona konfiguracji gry - per-server
+ * Każdy serwer ma własną konfigurację gry, mody i pliki
  */
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { configApi, serversApi } from '../api/client';
+import { serversApi } from '../api/client';
 import {
     Settings, Server, Cpu, Save, AlertTriangle,
     Loader2, RefreshCw, Gamepad2, Plus, Trash2, Edit3,
-    GripVertical, Power, Star, X
+    GripVertical, Power, Star, X, Package, Eraser,
+    ChevronDown, ChevronRight, Square, CheckSquare
 } from 'lucide-react';
 
-// Dostępne wersje Minecraft (można rozbudować o pobieranie z API)
 const MC_VERSIONS = [
     '1.21', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20',
     '1.19.4', '1.19.3', '1.19.2', '1.19',
@@ -28,71 +29,43 @@ const LOADER_TYPES = [
 ];
 
 function ConfigPage() {
-    const [config, setConfig] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [hasChanges, setHasChanges] = useState(false);
-
-    // Serwery
     const [servers, setServers] = useState([]);
-    const [loadingServers, setLoadingServers] = useState(true);
+    const [loading, setLoading] = useState(true);
+
+    // Server modal
     const [showServerModal, setShowServerModal] = useState(false);
     const [editingServer, setEditingServer] = useState(null);
     const [serverForm, setServerForm] = useState({
-        name: '', description: '', ip: '', port: 25565, is_default: false
+        name: '', description: '', ip: '', port: 25565, is_default: false,
+        game_version: '1.20.1', loader_type: 'vanilla', forge_version: '', fabric_version: '',
+        java_args: '-Xmx4G -Xms2G -XX:+UseG1GC',
+        maintenance_mode: false, maintenance_message: ''
     });
     const [savingServer, setSavingServer] = useState(false);
+
+    // Mods modal
+    const [showModsModal, setShowModsModal] = useState(false);
+    const [modsServer, setModsServer] = useState(null);
+    const [serverMods, setServerMods] = useState([]);
+    const [loadingMods, setLoadingMods] = useState(false);
+    const [savingMods, setSavingMods] = useState(false);
+
+    // Expanded server config panels
+    const [expandedServer, setExpandedServer] = useState(null);
+    const [serverConfigForm, setServerConfigForm] = useState({});
+    const [savingConfig, setSavingConfig] = useState(false);
 
     // Drag & Drop state
     const [draggedServer, setDraggedServer] = useState(null);
     const [dragOverServer, setDragOverServer] = useState(null);
 
-    // Formularz konfiguracji
-    const [form, setForm] = useState({
-        game_version: '',
-        loader_type: 'vanilla',
-        forge_version: '',
-        fabric_version: '',
-        server_ip: '',
-        server_port: 25565,
-        java_args: '',
-        maintenance_mode: false,
-        maintenance_message: ''
-    });
-
     useEffect(() => {
-        loadConfig();
         loadServers();
     }, []);
 
-    const loadConfig = async () => {
-        try {
-            setLoading(true);
-            const response = await configApi.get();
-            if (response.success) {
-                setConfig(response.data);
-                setForm({
-                    game_version: response.data.game_version || '',
-                    loader_type: response.data.loader_type || 'vanilla',
-                    forge_version: response.data.forge_version || '',
-                    fabric_version: response.data.fabric_version || '',
-                    server_ip: response.data.server_ip || '',
-                    server_port: response.data.server_port || 25565,
-                    java_args: response.data.java_args || '',
-                    maintenance_mode: !!response.data.maintenance_mode,
-                    maintenance_message: response.data.maintenance_message || ''
-                });
-            }
-        } catch (error) {
-            toast.error('Błąd ładowania konfiguracji');
-        } finally {
-            setLoading(false);
-        }
-    };
-
     const loadServers = async () => {
         try {
-            setLoadingServers(true);
+            setLoading(true);
             const response = await serversApi.getAll();
             if (response.success) {
                 setServers(response.data);
@@ -100,49 +73,20 @@ function ConfigPage() {
         } catch (error) {
             toast.error('Błąd ładowania serwerów');
         } finally {
-            setLoadingServers(false);
+            setLoading(false);
         }
     };
 
-    const handleChange = (field, value) => {
-        setForm(prev => ({ ...prev, [field]: value }));
-        setHasChanges(true);
-    };
-
-    const handleSave = async () => {
-        setSaving(true);
-        try {
-            await configApi.update(form);
-            toast.success('Konfiguracja została zapisana');
-            setHasChanges(false);
-            loadConfig();
-        } catch (error) {
-            toast.error('Błąd zapisywania konfiguracji');
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    const handleMaintenanceToggle = async () => {
-        const newState = !form.maintenance_mode;
-        setSaving(true);
-        try {
-            await configApi.setMaintenance(newState, form.maintenance_message);
-            toast.success(newState ? 'Tryb konserwacji włączony' : 'Tryb konserwacji wyłączony');
-            setForm(prev => ({ ...prev, maintenance_mode: newState }));
-            setHasChanges(false);
-        } catch (error) {
-            toast.error('Błąd zmiany trybu konserwacji');
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    // === Zarządzanie serwerami ===
+    // === Server CRUD ===
 
     const openAddServerModal = () => {
         setEditingServer(null);
-        setServerForm({ name: '', description: '', ip: '', port: 25565, is_default: false });
+        setServerForm({
+            name: '', description: '', ip: '', port: 25565, is_default: false,
+            game_version: '1.20.1', loader_type: 'vanilla', forge_version: '', fabric_version: '',
+            java_args: '-Xmx4G -Xms2G -XX:+UseG1GC',
+            maintenance_mode: false, maintenance_message: ''
+        });
         setShowServerModal(true);
     };
 
@@ -153,7 +97,14 @@ function ConfigPage() {
             description: server.description || '',
             ip: server.ip,
             port: server.port || 25565,
-            is_default: !!server.is_default
+            is_default: !!server.is_default,
+            game_version: server.game_version || '1.20.1',
+            loader_type: server.loader_type || 'vanilla',
+            forge_version: server.forge_version || '',
+            fabric_version: server.fabric_version || '',
+            java_args: server.java_args || '-Xmx4G -Xms2G -XX:+UseG1GC',
+            maintenance_mode: !!server.maintenance_mode,
+            maintenance_message: server.maintenance_message || ''
         });
         setShowServerModal(true);
     };
@@ -186,7 +137,7 @@ function ConfigPage() {
     };
 
     const handleDeleteServer = async (server) => {
-        if (!confirm(`Czy na pewno chcesz usunąć serwer "${server.name}"?`)) return;
+        if (!confirm(`Czy na pewno chcesz usunąć serwer "${server.name}"? Wszystkie przypisania modów zostaną usunięte.`)) return;
         try {
             await serversApi.delete(server.id);
             toast.success('Serwer usunięty');
@@ -214,6 +165,103 @@ function ConfigPage() {
         } catch (error) {
             toast.error('Błąd ustawiania domyślnego serwera');
         }
+    };
+
+    // === Clear files ===
+
+    const handleClearFiles = async (server) => {
+        if (!confirm(`Czy na pewno chcesz wyczyścić WSZYSTKIE mody i pliki z serwera "${server.name}"? Ta operacja usunie przypisania, nie same pliki.`)) return;
+        try {
+            await serversApi.clearFiles(server.id);
+            toast.success(`Wyczyszczono pliki serwera "${server.name}"`);
+            loadServers();
+        } catch (error) {
+            toast.error('Błąd czyszczenia plików');
+        }
+    };
+
+    // === Inline config editing ===
+
+    const toggleExpandServer = (server) => {
+        if (expandedServer === server.id) {
+            setExpandedServer(null);
+        } else {
+            setExpandedServer(server.id);
+            setServerConfigForm({
+                game_version: server.game_version || '1.20.1',
+                loader_type: server.loader_type || 'vanilla',
+                forge_version: server.forge_version || '',
+                fabric_version: server.fabric_version || '',
+                java_args: server.java_args || '-Xmx4G -Xms2G -XX:+UseG1GC',
+                maintenance_mode: !!server.maintenance_mode,
+                maintenance_message: server.maintenance_message || ''
+            });
+        }
+    };
+
+    const handleConfigChange = (field, value) => {
+        setServerConfigForm(prev => ({ ...prev, [field]: value }));
+    };
+
+    const handleSaveConfig = async (serverId) => {
+        setSavingConfig(true);
+        try {
+            await serversApi.update(serverId, serverConfigForm);
+            toast.success('Konfiguracja serwera zapisana');
+            loadServers();
+        } catch (error) {
+            toast.error('Błąd zapisywania konfiguracji');
+        } finally {
+            setSavingConfig(false);
+        }
+    };
+
+    // === Mods management modal ===
+
+    const openModsModal = async (server) => {
+        setModsServer(server);
+        setShowModsModal(true);
+        setLoadingMods(true);
+        try {
+            const response = await serversApi.getMods(server.id);
+            if (response.success) {
+                setServerMods(response.data.mods);
+            }
+        } catch (error) {
+            toast.error('Błąd ładowania modów');
+        } finally {
+            setLoadingMods(false);
+        }
+    };
+
+    const toggleModAssignment = (modId) => {
+        setServerMods(prev => prev.map(m =>
+            m.id === modId ? { ...m, assigned: !m.assigned } : m
+        ));
+    };
+
+    const handleSaveMods = async () => {
+        if (!modsServer) return;
+        setSavingMods(true);
+        try {
+            const selectedModIds = serverMods.filter(m => m.assigned).map(m => m.id);
+            await serversApi.setMods(modsServer.id, selectedModIds);
+            toast.success(`Przypisano ${selectedModIds.length} modów do "${modsServer.name}"`);
+            setShowModsModal(false);
+            loadServers();
+        } catch (error) {
+            toast.error('Błąd zapisywania modów');
+        } finally {
+            setSavingMods(false);
+        }
+    };
+
+    const selectAllMods = () => {
+        setServerMods(prev => prev.map(m => ({ ...m, assigned: true })));
+    };
+
+    const deselectAllMods = () => {
+        setServerMods(prev => prev.map(m => ({ ...m, assigned: false })));
     };
 
     // === Drag & Drop ===
@@ -248,7 +296,6 @@ function ConfigPage() {
 
         if (!draggedServer || draggedServer.id === targetServer.id) return;
 
-        // Reorder locally first for instant feedback
         const newServers = [...servers];
         const dragIndex = newServers.findIndex(s => s.id === draggedServer.id);
         const dropIndex = newServers.findIndex(s => s.id === targetServer.id);
@@ -257,14 +304,13 @@ function ConfigPage() {
         newServers.splice(dropIndex, 0, removed);
         setServers(newServers);
 
-        // Send reorder to API
         try {
             const orderedIds = newServers.map(s => s.id);
             await serversApi.reorder(orderedIds);
             toast.success('Kolejność serwerów zaktualizowana');
         } catch (error) {
             toast.error('Błąd zmiany kolejności');
-            loadServers(); // Revert on error
+            loadServers();
         }
 
         setDraggedServer(null);
@@ -280,19 +326,19 @@ function ConfigPage() {
 
     return (
         <div className="space-y-6 animate-fadeIn">
-            {/* Nagłówek */}
+            {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold text-white flex items-center gap-2">
                         <Settings className="w-7 h-7 text-mc-green" />
-                        Konfiguracja Gry
+                        Serwery i Konfiguracja
                     </h1>
-                    <p className="text-gray-400">Ustawienia wersji gry, serwerów i parametrów</p>
+                    <p className="text-gray-400">Każdy serwer ma własną wersję gry, loader i mody</p>
                 </div>
 
                 <div className="flex gap-2">
                     <button
-                        onClick={() => { loadConfig(); loadServers(); }}
+                        onClick={loadServers}
                         className="btn btn-secondary"
                         disabled={loading}
                     >
@@ -300,77 +346,62 @@ function ConfigPage() {
                         Odśwież
                     </button>
                     <button
-                        onClick={handleSave}
+                        onClick={openAddServerModal}
                         className="btn btn-primary"
-                        disabled={saving || !hasChanges}
                     >
-                        {saving ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                            <Save className="w-4 h-4" />
-                        )}
-                        Zapisz
-                    </button>
-                </div>
-            </div>
-
-            {/* Ostrzeżenie o zmianach */}
-            {hasChanges && (
-                <div className="card bg-yellow-900/20 border-yellow-800 flex items-center gap-3">
-                    <AlertTriangle className="w-5 h-5 text-yellow-500" />
-                    <p className="text-yellow-300 text-sm">Masz niezapisane zmiany</p>
-                </div>
-            )}
-
-            {/* ============ SERWERY ============ */}
-            <div className="card">
-                <div className="card-header flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                        <Server className="w-5 h-5 text-mc-green" />
-                        Serwery Minecraft
-                    </div>
-                    <button onClick={openAddServerModal} className="btn btn-primary btn-sm">
                         <Plus className="w-4 h-4" />
                         Dodaj serwer
                     </button>
                 </div>
+            </div>
 
-                {loadingServers ? (
-                    <div className="flex items-center justify-center py-8">
-                        <div className="loader" />
-                    </div>
-                ) : servers.length === 0 ? (
-                    <div className="text-center py-8">
-                        <Server className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                        <p className="text-gray-400">Brak serwerów</p>
-                        <p className="text-gray-500 text-sm mt-1">Dodaj pierwszy serwer, który pojawi się w launcherze</p>
-                    </div>
-                ) : (
-                    <div className="space-y-3">
-                        {servers.map((server) => (
+            {/* Server list */}
+            {servers.length === 0 ? (
+                <div className="card text-center py-12">
+                    <Server className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                    <p className="text-gray-400 text-lg">Brak serwerów</p>
+                    <p className="text-gray-500 text-sm mt-1">Dodaj pierwszy serwer, który pojawi się w launcherze</p>
+                    <button onClick={openAddServerModal} className="btn btn-primary mt-4">
+                        <Plus className="w-4 h-4" />
+                        Dodaj serwer
+                    </button>
+                </div>
+            ) : (
+                <div className="space-y-4">
+                    {servers.map((server) => (
+                        <div key={server.id} className="card p-0 overflow-hidden">
+                            {/* Server header row */}
                             <div
-                                key={server.id}
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, server)}
                                 onDragEnd={handleDragEnd}
                                 onDragOver={(e) => handleDragOver(e, server)}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, server)}
-                                className={`flex items-center gap-4 p-4 rounded-lg border transition-colors ${
+                                className={`flex items-center gap-4 p-4 transition-colors ${
                                     dragOverServer === server.id
-                                        ? 'border-mc-accent border-dashed bg-mc-accent/10'
+                                        ? 'border-b border-mc-accent border-dashed bg-mc-accent/10'
                                         : server.is_enabled
-                                            ? server.is_default
-                                                ? 'border-mc-accent bg-mc-accent/5'
-                                                : 'border-mc-gray bg-mc-darker'
-                                            : 'border-mc-gray bg-mc-darker opacity-50'
+                                            ? 'border-b border-mc-gray'
+                                            : 'border-b border-mc-gray opacity-60'
                                 }`}
                             >
                                 <GripVertical className="w-5 h-5 text-gray-600 cursor-grab flex-shrink-0 hover:text-gray-400" />
 
+                                {/* Expand/collapse toggle */}
+                                <button
+                                    onClick={() => toggleExpandServer(server)}
+                                    className="p-1 rounded hover:bg-mc-gray text-gray-400 hover:text-white transition-colors"
+                                >
+                                    {expandedServer === server.id
+                                        ? <ChevronDown className="w-5 h-5" />
+                                        : <ChevronRight className="w-5 h-5" />
+                                    }
+                                </button>
+
                                 <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
-                                        <p className="font-medium text-white truncate">{server.name}</p>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <p className="font-medium text-white">{server.name}</p>
                                         {!!server.is_default && (
                                             <span className="px-2 py-0.5 text-xs font-medium bg-mc-accent/20 text-mc-accent rounded">
                                                 Domyślny
@@ -381,16 +412,42 @@ function ConfigPage() {
                                                 Wyłączony
                                             </span>
                                         )}
+                                        {!!server.maintenance_mode && (
+                                            <span className="px-2 py-0.5 text-xs font-medium bg-yellow-900/30 text-yellow-400 rounded">
+                                                Konserwacja
+                                            </span>
+                                        )}
                                     </div>
-                                    <p className="text-sm text-gray-400 font-mono">
-                                        {server.ip}:{server.port || 25565}
-                                    </p>
+                                    <div className="flex items-center gap-4 mt-1 text-sm text-gray-400">
+                                        <span className="font-mono">{server.ip}:{server.port || 25565}</span>
+                                        <span>{server.game_version || '1.20.1'} / {server.loader_type || 'vanilla'}</span>
+                                        <span className="flex items-center gap-1">
+                                            <Package className="w-3.5 h-3.5" />
+                                            {server.mod_count || 0} modów
+                                        </span>
+                                    </div>
                                     {server.description && (
                                         <p className="text-xs text-gray-500 mt-1 truncate">{server.description}</p>
                                     )}
                                 </div>
 
                                 <div className="flex items-center gap-1 flex-shrink-0">
+                                    {/* Mods button */}
+                                    <button
+                                        onClick={() => openModsModal(server)}
+                                        className="p-2 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-purple-400 transition-colors"
+                                        title="Zarządzaj modami"
+                                    >
+                                        <Package className="w-4 h-4" />
+                                    </button>
+                                    {/* Clear files button */}
+                                    <button
+                                        onClick={() => handleClearFiles(server)}
+                                        className="p-2 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-orange-400 transition-colors"
+                                        title="Wyczyść pliki (mody, resourcepacki)"
+                                    >
+                                        <Eraser className="w-4 h-4" />
+                                    </button>
                                     {!server.is_default && server.is_enabled && (
                                         <button
                                             onClick={() => handleSetDefault(server)}
@@ -425,15 +482,128 @@ function ConfigPage() {
                                     </button>
                                 </div>
                             </div>
-                        ))}
-                    </div>
-                )}
-            </div>
 
-            {/* Modal dodawania/edycji serwera */}
+                            {/* Expanded config panel */}
+                            {expandedServer === server.id && (
+                                <div className="p-4 bg-mc-darker border-t border-mc-gray space-y-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        {/* Game version */}
+                                        <div>
+                                            <label className="label">Wersja Minecraft</label>
+                                            <select
+                                                value={serverConfigForm.game_version}
+                                                onChange={(e) => handleConfigChange('game_version', e.target.value)}
+                                                className="input"
+                                            >
+                                                {MC_VERSIONS.map(v => (
+                                                    <option key={v} value={v}>{v}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        {/* Loader type */}
+                                        <div>
+                                            <label className="label">Typ loadera</label>
+                                            <select
+                                                value={serverConfigForm.loader_type}
+                                                onChange={(e) => handleConfigChange('loader_type', e.target.value)}
+                                                className="input"
+                                            >
+                                                {LOADER_TYPES.map(l => (
+                                                    <option key={l.value} value={l.value}>{l.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        {/* Loader version */}
+                                        {serverConfigForm.loader_type === 'forge' && (
+                                            <div>
+                                                <label className="label">Wersja Forge</label>
+                                                <input
+                                                    type="text"
+                                                    value={serverConfigForm.forge_version}
+                                                    onChange={(e) => handleConfigChange('forge_version', e.target.value)}
+                                                    className="input"
+                                                    placeholder="np. 47.2.0"
+                                                />
+                                            </div>
+                                        )}
+                                        {serverConfigForm.loader_type === 'fabric' && (
+                                            <div>
+                                                <label className="label">Wersja Fabric</label>
+                                                <input
+                                                    type="text"
+                                                    value={serverConfigForm.fabric_version}
+                                                    onChange={(e) => handleConfigChange('fabric_version', e.target.value)}
+                                                    className="input"
+                                                    placeholder="np. 0.15.6"
+                                                />
+                                            </div>
+                                        )}
+
+                                        {/* Java args */}
+                                        <div className="md:col-span-2 lg:col-span-3">
+                                            <label className="label">Argumenty JVM</label>
+                                            <input
+                                                type="text"
+                                                value={serverConfigForm.java_args}
+                                                onChange={(e) => handleConfigChange('java_args', e.target.value)}
+                                                className="input font-mono text-sm"
+                                                placeholder="-Xmx4G -Xms2G -XX:+UseG1GC"
+                                            />
+                                        </div>
+
+                                        {/* Maintenance */}
+                                        <div className="md:col-span-2 lg:col-span-3">
+                                            <div className="flex items-center gap-3 mb-2">
+                                                <input
+                                                    type="checkbox"
+                                                    id={`maintenance-${server.id}`}
+                                                    checked={serverConfigForm.maintenance_mode}
+                                                    onChange={(e) => handleConfigChange('maintenance_mode', e.target.checked)}
+                                                    className="accent-mc-accent"
+                                                />
+                                                <label htmlFor={`maintenance-${server.id}`} className="text-sm text-gray-300 cursor-pointer">
+                                                    Tryb konserwacji
+                                                </label>
+                                            </div>
+                                            {serverConfigForm.maintenance_mode && (
+                                                <input
+                                                    type="text"
+                                                    value={serverConfigForm.maintenance_message}
+                                                    onChange={(e) => handleConfigChange('maintenance_message', e.target.value)}
+                                                    className="input text-sm"
+                                                    placeholder="Wiadomość dla graczy..."
+                                                />
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex justify-end">
+                                        <button
+                                            onClick={() => handleSaveConfig(server.id)}
+                                            className="btn btn-primary"
+                                            disabled={savingConfig}
+                                        >
+                                            {savingConfig ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <Save className="w-4 h-4" />
+                                            )}
+                                            Zapisz konfigurację
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Server add/edit modal */}
             {showServerModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-                    <div className="card w-full max-w-md mx-4 relative">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="card w-full max-w-lg relative max-h-[90vh] overflow-y-auto">
                         <button
                             onClick={() => setShowServerModal(false)}
                             className="absolute top-4 right-4 p-1 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-white transition-colors"
@@ -446,6 +616,7 @@ function ConfigPage() {
                         </h3>
 
                         <div className="space-y-4">
+                            {/* Basic info */}
                             <div>
                                 <label className="label">Nazwa serwera</label>
                                 <input
@@ -492,6 +663,74 @@ function ConfigPage() {
                                 </div>
                             </div>
 
+                            {/* Game config */}
+                            <hr className="border-mc-gray" />
+                            <p className="text-sm font-medium text-gray-300">Konfiguracja gry</p>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="label">Wersja MC</label>
+                                    <select
+                                        value={serverForm.game_version}
+                                        onChange={(e) => handleServerFormChange('game_version', e.target.value)}
+                                        className="input"
+                                    >
+                                        {MC_VERSIONS.map(v => (
+                                            <option key={v} value={v}>{v}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="label">Loader</label>
+                                    <select
+                                        value={serverForm.loader_type}
+                                        onChange={(e) => handleServerFormChange('loader_type', e.target.value)}
+                                        className="input"
+                                    >
+                                        {LOADER_TYPES.map(l => (
+                                            <option key={l.value} value={l.value}>{l.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            {serverForm.loader_type === 'forge' && (
+                                <div>
+                                    <label className="label">Wersja Forge</label>
+                                    <input
+                                        type="text"
+                                        value={serverForm.forge_version}
+                                        onChange={(e) => handleServerFormChange('forge_version', e.target.value)}
+                                        className="input"
+                                        placeholder="np. 47.2.0"
+                                    />
+                                </div>
+                            )}
+
+                            {serverForm.loader_type === 'fabric' && (
+                                <div>
+                                    <label className="label">Wersja Fabric</label>
+                                    <input
+                                        type="text"
+                                        value={serverForm.fabric_version}
+                                        onChange={(e) => handleServerFormChange('fabric_version', e.target.value)}
+                                        className="input"
+                                        placeholder="np. 0.15.6"
+                                    />
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="label">Argumenty JVM</label>
+                                <input
+                                    type="text"
+                                    value={serverForm.java_args}
+                                    onChange={(e) => handleServerFormChange('java_args', e.target.value)}
+                                    className="input font-mono text-sm"
+                                    placeholder="-Xmx4G -Xms2G -XX:+UseG1GC"
+                                />
+                            </div>
+
                             <div className="flex items-center gap-3 p-3 rounded-lg bg-mc-darker border border-mc-gray">
                                 <input
                                     type="checkbox"
@@ -506,9 +745,14 @@ function ConfigPage() {
                             </div>
 
                             <div className="p-3 bg-mc-darker rounded-lg">
-                                <p className="text-sm text-gray-400">Podgląd adresu:</p>
+                                <p className="text-sm text-gray-400">Podgląd:</p>
                                 <p className="font-mono text-white">
                                     {serverForm.ip || 'localhost'}:{serverForm.port || 25565}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    MC {serverForm.game_version} / {serverForm.loader_type}
+                                    {serverForm.loader_type === 'forge' && serverForm.forge_version ? ` ${serverForm.forge_version}` : ''}
+                                    {serverForm.loader_type === 'fabric' && serverForm.fabric_version ? ` ${serverForm.fabric_version}` : ''}
                                 </p>
                             </div>
                         </div>
@@ -537,182 +781,109 @@ function ConfigPage() {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Wersja gry */}
-                <div className="card">
-                    <div className="card-header">
-                        <Gamepad2 className="w-5 h-5 text-mc-green" />
-                        Wersja Minecraft
-                    </div>
+            {/* Mods assignment modal */}
+            {showModsModal && modsServer && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="card w-full max-w-2xl relative max-h-[85vh] flex flex-col">
+                        <button
+                            onClick={() => setShowModsModal(false)}
+                            className="absolute top-4 right-4 p-1 rounded-lg hover:bg-mc-gray text-gray-500 hover:text-white transition-colors z-10"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
 
-                    <div className="space-y-4">
-                        <div>
-                            <label className="label">Wersja gry</label>
-                            <select
-                                value={form.game_version}
-                                onChange={(e) => handleChange('game_version', e.target.value)}
-                                className="input"
-                            >
-                                {MC_VERSIONS.map(v => (
-                                    <option key={v} value={v}>{v}</option>
-                                ))}
-                            </select>
+                        <h3 className="text-lg font-bold text-white mb-1">
+                            Mody - {modsServer.name}
+                        </h3>
+                        <p className="text-sm text-gray-400 mb-4">
+                            Zaznacz mody, które mają być dostępne na tym serwerze
+                        </p>
+
+                        {/* Select all / none */}
+                        <div className="flex gap-2 mb-3">
+                            <button onClick={selectAllMods} className="btn btn-secondary btn-sm">
+                                <CheckSquare className="w-3.5 h-3.5" />
+                                Zaznacz wszystkie
+                            </button>
+                            <button onClick={deselectAllMods} className="btn btn-secondary btn-sm">
+                                <Square className="w-3.5 h-3.5" />
+                                Odznacz wszystkie
+                            </button>
+                            <span className="text-sm text-gray-400 ml-auto self-center">
+                                {serverMods.filter(m => m.assigned).length} / {serverMods.length} wybranych
+                            </span>
                         </div>
 
-                        <div>
-                            <label className="label">Typ loadera</label>
-                            <div className="space-y-2">
-                                {LOADER_TYPES.map(loader => (
+                        {/* Mods list */}
+                        <div className="flex-1 overflow-y-auto border border-mc-gray rounded-lg divide-y divide-mc-gray">
+                            {loadingMods ? (
+                                <div className="flex items-center justify-center py-12">
+                                    <div className="loader" />
+                                </div>
+                            ) : serverMods.length === 0 ? (
+                                <div className="text-center py-12">
+                                    <Package className="w-10 h-10 text-gray-600 mx-auto mb-3" />
+                                    <p className="text-gray-400">Brak modów w systemie</p>
+                                    <p className="text-gray-500 text-sm">Dodaj mody w zakładce "Mody" aby je przypisać</p>
+                                </div>
+                            ) : (
+                                serverMods.map(mod => (
                                     <label
-                                        key={loader.value}
-                                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                                            form.loader_type === loader.value
-                                                ? 'border-mc-accent bg-mc-accent/10'
-                                                : 'border-mc-gray hover:border-mc-light-gray'
+                                        key={mod.id}
+                                        className={`flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-mc-darker transition-colors ${
+                                            mod.assigned ? 'bg-mc-accent/5' : ''
                                         }`}
                                     >
                                         <input
-                                            type="radio"
-                                            name="loader_type"
-                                            value={loader.value}
-                                            checked={form.loader_type === loader.value}
-                                            onChange={(e) => handleChange('loader_type', e.target.value)}
-                                            className="mt-1 accent-mc-accent"
+                                            type="checkbox"
+                                            checked={mod.assigned}
+                                            onChange={() => toggleModAssignment(mod.id)}
+                                            className="accent-mc-accent flex-shrink-0"
                                         />
-                                        <div>
-                                            <p className="font-medium text-white">{loader.label}</p>
-                                            <p className="text-sm text-gray-500">{loader.description}</p>
+                                        <div className="flex-1 min-w-0">
+                                            <p className={`text-sm font-medium truncate ${
+                                                mod.assigned ? 'text-white' : 'text-gray-400'
+                                            }`}>
+                                                {mod.name}
+                                            </p>
+                                            <p className="text-xs text-gray-500 truncate">
+                                                {mod.filename}
+                                                {mod.mod_type && mod.mod_type !== 'mod' && (
+                                                    <span className="ml-2 text-gray-600">({mod.mod_type})</span>
+                                                )}
+                                            </p>
                                         </div>
+                                        {!!mod.is_required && (
+                                            <span className="px-2 py-0.5 text-xs bg-blue-900/30 text-blue-400 rounded flex-shrink-0">
+                                                Wymagany
+                                            </span>
+                                        )}
                                     </label>
-                                ))}
-                            </div>
+                                ))
+                            )}
                         </div>
 
-                        {form.loader_type === 'forge' && (
-                            <div>
-                                <label className="label">Wersja Forge</label>
-                                <input
-                                    type="text"
-                                    value={form.forge_version}
-                                    onChange={(e) => handleChange('forge_version', e.target.value)}
-                                    className="input"
-                                    placeholder="np. 47.2.0"
-                                />
-                                <p className="text-xs text-gray-500 mt-1">
-                                    Zostaw puste dla najnowszej wersji
-                                </p>
-                            </div>
-                        )}
-
-                        {form.loader_type === 'fabric' && (
-                            <div>
-                                <label className="label">Wersja Fabric Loader</label>
-                                <input
-                                    type="text"
-                                    value={form.fabric_version}
-                                    onChange={(e) => handleChange('fabric_version', e.target.value)}
-                                    className="input"
-                                    placeholder="np. 0.15.6"
-                                />
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Parametry JVM */}
-                <div className="card">
-                    <div className="card-header">
-                        <Cpu className="w-5 h-5 text-mc-green" />
-                        Parametry JVM
-                    </div>
-
-                    <div className="space-y-4">
-                        <div>
-                            <label className="label">Argumenty Java</label>
-                            <textarea
-                                value={form.java_args}
-                                onChange={(e) => handleChange('java_args', e.target.value)}
-                                className="input min-h-[120px] font-mono text-sm resize-none"
-                                placeholder="-Xmx4G -Xms2G -XX:+UseG1GC"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">
-                                Domyślne argumenty dla wszystkich graczy. Gracze mogą nadpisać RAM w launcherze.
-                            </p>
-                        </div>
-
-                        <div className="p-4 bg-mc-darker rounded-lg">
-                            <p className="text-sm text-gray-400 mb-2">Zalecane argumenty:</p>
-                            <code className="text-xs text-green-400 block whitespace-pre-wrap">
-                                {`-Xmx4G -Xms2G -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC`}
-                            </code>
+                        <div className="flex gap-3 mt-4">
+                            <button
+                                onClick={() => setShowModsModal(false)}
+                                className="btn btn-secondary flex-1"
+                            >
+                                Anuluj
+                            </button>
+                            <button
+                                onClick={handleSaveMods}
+                                className="btn btn-primary flex-1"
+                                disabled={savingMods || loadingMods}
+                            >
+                                {savingMods ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Save className="w-4 h-4" />
+                                )}
+                                Zapisz ({serverMods.filter(m => m.assigned).length} modów)
+                            </button>
                         </div>
                     </div>
-                </div>
-
-                {/* Tryb konserwacji */}
-                <div className="card lg:col-span-2">
-                    <div className="card-header">
-                        <AlertTriangle className="w-5 h-5 text-yellow-500" />
-                        Tryb Konserwacji
-                    </div>
-
-                    <div className="space-y-4">
-                        <div className={`p-4 rounded-lg border ${
-                            form.maintenance_mode
-                                ? 'bg-yellow-900/20 border-yellow-800'
-                                : 'bg-mc-darker border-mc-gray'
-                        }`}>
-                            <div className="flex items-center justify-between mb-4">
-                                <div>
-                                    <p className="font-medium text-white">
-                                        {form.maintenance_mode ? 'Konserwacja włączona' : 'Konserwacja wyłączona'}
-                                    </p>
-                                    <p className="text-sm text-gray-500">
-                                        {form.maintenance_mode
-                                            ? 'Gracze nie mogą się połączyć'
-                                            : 'Serwer działa normalnie'}
-                                    </p>
-                                </div>
-                                <button
-                                    onClick={handleMaintenanceToggle}
-                                    disabled={saving}
-                                    className={`btn ${
-                                        form.maintenance_mode ? 'btn-primary' : 'btn-warning'
-                                    }`}
-                                >
-                                    {saving ? (
-                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                    ) : form.maintenance_mode ? (
-                                        'Wyłącz'
-                                    ) : (
-                                        'Włącz'
-                                    )}
-                                </button>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="label">Wiadomość dla graczy</label>
-                            <textarea
-                                value={form.maintenance_message}
-                                onChange={(e) => handleChange('maintenance_message', e.target.value)}
-                                className="input min-h-[80px] resize-none"
-                                placeholder="Serwer jest obecnie aktualizowany. Wrócimy wkrótce!"
-                            />
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Informacje o ostatniej aktualizacji */}
-            {config && (
-                <div className="card bg-mc-darker">
-                    <p className="text-sm text-gray-500">
-                        Ostatnia aktualizacja konfiguracji: {' '}
-                        <span className="text-gray-300">
-                            {new Date(config.updated_at).toLocaleString('pl-PL')}
-                        </span>
-                    </p>
                 </div>
             )}
         </div>

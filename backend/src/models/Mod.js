@@ -191,6 +191,21 @@ class Mod {
     static count() {
         return db.prepare('SELECT COUNT(*) as count FROM mods').get().count;
     }
+
+    /**
+     * Pobiera serwery, do których przypisany jest mod
+     * @param {number} modId
+     * @returns {array} Lista serwerów z informacją o przypisaniu
+     */
+    static getServerAssignments(modId) {
+        return db.prepare(`
+            SELECT s.id, s.name, sm.is_enabled as server_enabled
+            FROM servers s
+            INNER JOIN server_mods sm ON sm.server_id = s.id
+            WHERE sm.mod_id = ?
+            ORDER BY s.display_order ASC
+        `).all(modId);
+    }
 }
 
 export default Mod;
