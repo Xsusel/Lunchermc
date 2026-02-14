@@ -28,7 +28,9 @@ export const ModLoaderType = {
 function getApiKey() {
     const key = process.env.CURSEFORGE_API_KEY;
     if (!key) {
-        throw new Error('CURSEFORGE_API_KEY environment variable is not set');
+        const err = new Error('Klucz API CurseForge nie jest skonfigurowany. Ustaw CURSEFORGE_API_KEY w pliku .env lub docker-compose.yml');
+        err.statusCode = 503;
+        throw err;
     }
     return key;
 }

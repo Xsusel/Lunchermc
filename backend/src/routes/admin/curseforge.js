@@ -25,6 +25,17 @@ import {
 
 const router = Router();
 
+// Sprawdź czy klucz API jest skonfigurowany
+router.use((req, res, next) => {
+    if (!process.env.CURSEFORGE_API_KEY) {
+        return res.status(503).json({
+            success: false,
+            error: 'Integracja CurseForge nie jest skonfigurowana. Ustaw CURSEFORGE_API_KEY w zmiennych środowiskowych.'
+        });
+    }
+    next();
+});
+
 // ============================================
 // GET /search - Search mods on CurseForge
 // ============================================
