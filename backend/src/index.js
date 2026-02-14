@@ -25,6 +25,7 @@ import wsManager from './utils/wsManager.js';
 import { ScheduledMaintenance, Server } from './models/index.js';
 import { createLogger } from './utils/logger.js';
 import { runMigrations } from './config/migrations.js';
+import { ensureCriticalSchema } from './config/ensureSchema.js';
 import { notifyServerStart } from './utils/discord.js';
 
 const log = createLogger('Server');
@@ -118,6 +119,9 @@ ensureDir(path.join(getUploadsPath(), 'configs'));
 ensureDir(path.join(getUploadsPath(), 'skins'));
 ensureDir(path.join(getUploadsPath(), 'capes'));
 ensureDir(path.join(__dirname, '../data'));
+
+// Upewnij się że krytyczne kolumny istnieją (safety net dla istniejących baz)
+ensureCriticalSchema();
 
 // Uruchom migracje bazy danych
 runMigrations();
