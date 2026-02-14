@@ -24,6 +24,7 @@ import {
     getGameVersions as cfGetGameVersions,
     MINECRAFT_GAME_ID,
 } from '../../utils/curseforge.js';
+import { findModDownload as mrFindModDownload } from '../../utils/modrinth.js';
 
 const router = Router();
 
@@ -186,14 +187,10 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
     // 1. Get mod details from CurseForge
     const cfMod = await cfGetModById(parseInt(modId));
 
-    // 2. Get download URL
-    const downloadUrl = await cfGetFileDownloadUrl(parseInt(modId), parseInt(fileId));
-    if (!downloadUrl) {
-        return res.status(404).json({
-            success: false,
-            error: 'Download URL not available for this file. The mod author may have disabled direct downloads.',
-        });
-    }
+    // 2. Get download URL (with Modrinth fallback)
+    let downloadUrl = await cfGetFileDownloadUrl(parseInt(modId), parseInt(fileId));
+    let modrinthFallback = false;
+    let modrinthFileName = null;
 
     // 3. Get file details
     const filesResult = await cfGetModFiles(parseInt(modId), {
@@ -201,7 +198,31 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
         pageSize: 50,
     });
     const fileInfo = filesResult.data.find(f => f.id === parseInt(fileId));
-    const fileName = fileInfo ? fileInfo.fileName : `${cfMod.slug}-${fileId}.jar`;
+    let fileName = fileInfo ? fileInfo.fileName : `${cfMod.slug}-${fileId}.jar`;
+
+    if (!downloadUrl) {
+        // Fallback: szukaj na Modrinth
+        const loaderType = fileInfo?.gameVersionTypeId ? undefined :
+            (cfMod.categories?.some(c => c.name?.toLowerCase().includes('neoforge')) ? 'neoforge' :
+            cfMod.categories?.some(c => c.name?.toLowerCase().includes('fabric')) ? 'fabric' : 'forge');
+
+        const mrResult = await mrFindModDownload(cfMod.name, cfMod.slug, {
+            gameVersion: gameVersion || fileInfo?.gameVersions?.[0],
+            loader: loaderType,
+        });
+
+        if (!mrResult) {
+            return res.status(404).json({
+                success: false,
+                error: `Nie można pobrać "${cfMod.name}" - zablokowany na CurseForge i nie znaleziony na Modrinth.`,
+            });
+        }
+
+        downloadUrl = mrResult.downloadUrl;
+        modrinthFallback = true;
+        modrinthFileName = mrResult.fileName;
+        fileName = mrResult.fileName || fileName;
+    }
 
     // 4. Prepare destination in server's mods folder
     const serverModsPath = getServerSubPath(targetServer.id, 'mods');
@@ -265,10 +286,12 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
         name: cfMod.name,
     }, getClientIp(req));
 
+    const source = modrinthFallback ? ' (pobrano z Modrinth)' : '';
     res.status(201).json({
         success: true,
-        message: `Mod "${cfMod.name}" imported to "${targetServer.name}"`,
+        message: `Mod "${cfMod.name}" imported to "${targetServer.name}"${source}`,
         data: mod,
+        modrinthFallback,
     });
 }));
 
@@ -491,14 +514,36 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 continue;
             }
 
-            // Download
+            // Download (with Modrinth fallback)
             const targetFileId = manifestFileId || depFile.id;
-            const downloadUrl = await cfGetFileDownloadUrl(projectId, targetFileId);
+            let downloadUrl = await cfGetFileDownloadUrl(projectId, targetFileId);
+            let usedModrinth = false;
+            let finalFilename = safeFilename;
+
+            if (!downloadUrl) {
+                // Fallback: szukaj na Modrinth
+                try {
+                    const mrResult = await mrFindModDownload(depMod.name, depMod.slug, {
+                        gameVersion: mcVersion,
+                        loader: loaderType,
+                    });
+
+                    if (mrResult) {
+                        downloadUrl = mrResult.downloadUrl;
+                        finalFilename = sanitizeFilename(mrResult.fileName || safeFilename);
+                        usedModrinth = true;
+                        console.log(`[Modrinth fallback] ${depMod.name}: ${mrResult.downloadUrl}`);
+                    }
+                } catch (mrErr) {
+                    console.warn(`[Modrinth fallback] Failed for ${depMod.name}: ${mrErr.message}`);
+                }
+            }
+
             if (!downloadUrl) {
                 results.failed.push({
                     modId: projectId,
                     name: depMod.name,
-                    error: 'URL niedostepny',
+                    error: 'URL niedostepny (CurseForge + Modrinth)',
                 });
                 continue;
             }
@@ -508,22 +553,22 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 results.failed.push({
                     modId: projectId,
                     name: depMod.name,
-                    error: `HTTP ${downloadResponse.status}`,
+                    error: `HTTP ${downloadResponse.status}${usedModrinth ? ' (Modrinth)' : ''}`,
                 });
                 continue;
             }
 
             const arrayBuffer = await downloadResponse.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
-            const destPath = path.join(serverModsPath, safeFilename);
+            const destPath = path.join(serverModsPath, finalFilename);
             fs.writeFileSync(destPath, buffer);
 
             const sha256 = await calculateSHA256(destPath);
 
             const newMod = Mod.create({
                 name: depMod.name,
-                filename: safeFilename,
-                url: `/api/download/servers/${targetServer.id}/mods/${safeFilename}`,
+                filename: finalFilename,
+                url: `/api/download/servers/${targetServer.id}/mods/${finalFilename}`,
                 sha256,
                 file_size: buffer.length,
                 is_required: true,
@@ -531,7 +576,7 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 mod_type: 'mod',
                 description: depMod.summary || null,
                 curseforge_id: projectId,
-                curseforge_file_id: targetFileId,
+                curseforge_file_id: usedModrinth ? null : targetFileId,
                 curseforge_url: depMod.links?.websiteUrl || null,
             });
 
@@ -542,7 +587,8 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 id: newMod.id,
                 modId: projectId,
                 name: depMod.name,
-                filename: safeFilename,
+                filename: finalFilename,
+                source: usedModrinth ? 'modrinth' : 'curseforge',
             });
 
         } catch (err) {
