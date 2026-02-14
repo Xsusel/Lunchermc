@@ -9,7 +9,7 @@ import { Mod, ActivityLog, Server } from '../../models/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import {
     calculateSHA256, sanitizeFilename,
-    getModsPath, ensureDir, getClientIp,
+    getModsPath, getServerSubPath, ensureDir, getClientIp,
 } from '../../utils/helpers.js';
 import {
     searchMods as cfSearchMods,
@@ -19,6 +19,7 @@ import {
     getFileDownloadUrl as cfGetFileDownloadUrl,
     getModpackFiles as cfGetModpackFiles,
     extractModpackManifest as cfExtractModpackManifest,
+    parseManifestLoaderInfo as cfParseLoaderInfo,
     getCategories as cfGetCategories,
     getGameVersions as cfGetGameVersions,
     MINECRAFT_GAME_ID,
@@ -260,40 +261,140 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
 
 // ============================================
 // POST /import-modpack - Import a modpack from CurseForge
-// Downloads the modpack ZIP, reads manifest.json to get the real
-// list of mods (projectID + fileID pairs), then downloads each mod.
+// Downloads the modpack ZIP, reads manifest.json, extracts overrides,
+// downloads mods, creates/configures server with correct loader & Java.
 // ============================================
 router.post('/import-modpack', asyncHandler(async (req, res) => {
-    const { modId, fileId, gameVersion, includeOptional } = req.body;
+    const { modId, fileId, includeOptional, serverId, createServer } = req.body;
 
     if (!modId || !fileId) {
         return res.status(400).json({
             success: false,
-            error: 'modId and fileId are required',
+            error: 'modId i fileId sa wymagane',
         });
     }
 
-    // 1. Get modpack info
+    // 1. Get modpack info from CurseForge
     const cfModpack = await cfGetModById(parseInt(modId));
 
-    // 2. Extract mod list from modpack manifest (downloads ZIP, reads manifest.json)
-    let manifestFiles;
+    // 2. Download ZIP and extract manifest
+    let manifest, zipBuffer;
     try {
-        manifestFiles = await cfExtractModpackManifest(parseInt(modId), parseInt(fileId));
+        const extracted = await cfExtractModpackManifest(parseInt(modId), parseInt(fileId));
+        manifest = extracted.manifest;
+        zipBuffer = extracted.zipBuffer;
     } catch (err) {
         return res.status(400).json({
             success: false,
-            error: `Nie udało się odczytać manifestu modpacka: ${err.message}`,
+            error: `Nie udalo sie odczytac manifestu modpacka: ${err.message}`,
         });
     }
 
-    if (!manifestFiles || manifestFiles.length === 0) {
+    if (!manifest.files || manifest.files.length === 0) {
         return res.status(400).json({
             success: false,
-            error: 'Manifest modpacka nie zawiera żadnych modów.',
+            error: 'Manifest modpacka nie zawiera zadnych modow.',
         });
     }
 
+    // 3. Parse loader info from manifest
+    const loaderInfo = cfParseLoaderInfo(manifest);
+    const mcVersion = loaderInfo.gameVersion || '1.20.1';
+    const loaderType = loaderInfo.loaderType;
+    const loaderVersion = loaderInfo.loaderVersion;
+
+    // Determine Java args based on MC version
+    const mcMajor = parseInt(mcVersion.split('.')[1] || '0');
+    let javaArgs = '-Xmx4G -Xms2G -XX:+UseG1GC';
+    if (mcMajor >= 17) {
+        // MC 1.17+ needs more modern Java args
+        javaArgs = '-Xmx4G -Xms2G -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200';
+    }
+
+    // 4. Create new server or use existing
+    let targetServer;
+    if (createServer) {
+        // Create a new server with modpack config
+        targetServer = Server.create({
+            name: createServer.name || cfModpack.name,
+            description: `Modpack: ${cfModpack.name} (CurseForge)`,
+            ip: createServer.ip || 'localhost',
+            port: createServer.port || 25565,
+            is_default: createServer.isDefault || false,
+            game_version: mcVersion,
+            loader_type: loaderType,
+            forge_version: loaderType === 'forge' ? loaderVersion : null,
+            fabric_version: loaderType === 'fabric' ? loaderVersion : null,
+            neoforge_version: loaderType === 'neoforge' ? loaderVersion : null,
+            java_args: javaArgs,
+        });
+    } else if (serverId) {
+        targetServer = Server.getById(parseInt(serverId));
+        if (!targetServer) {
+            return res.status(404).json({
+                success: false,
+                error: 'Serwer nie znaleziony',
+            });
+        }
+        // Update server config to match modpack
+        Server.update(targetServer.id, {
+            game_version: mcVersion,
+            loader_type: loaderType,
+            forge_version: loaderType === 'forge' ? loaderVersion : null,
+            fabric_version: loaderType === 'fabric' ? loaderVersion : null,
+            neoforge_version: loaderType === 'neoforge' ? loaderVersion : null,
+            java_args: javaArgs,
+        });
+        targetServer = Server.getById(targetServer.id);
+    } else {
+        return res.status(400).json({
+            success: false,
+            error: 'Podaj serverId (istniejacy) lub createServer (nowy)',
+        });
+    }
+
+    // 5. Extract overrides from ZIP to server folder
+    let overridesExtracted = 0;
+    try {
+        const { default: AdmZip } = await import('adm-zip');
+        const zip = new AdmZip(zipBuffer);
+        const overridesDir = manifest.overrides || 'overrides';
+
+        const entries = zip.getEntries();
+        for (const entry of entries) {
+            const entryName = entry.entryName;
+            // Check if this entry is inside the overrides directory
+            if (!entryName.startsWith(overridesDir + '/')) continue;
+            if (entry.isDirectory) continue;
+
+            // Get relative path after overrides/ prefix
+            const relativePath = entryName.slice(overridesDir.length + 1);
+            if (!relativePath) continue;
+
+            // Skip mod JARs from overrides (we'll download them properly)
+            // But keep other files in mods/ like config JARs
+            const parts = relativePath.split('/');
+            const topFolder = parts[0];
+
+            // Determine destination based on folder type
+            const destDir = getServerSubPath(targetServer.id, topFolder);
+            ensureDir(destDir);
+
+            const subPath = parts.slice(1).join('/');
+            if (!subPath) continue; // folder entry
+
+            const destFile = path.join(destDir, subPath);
+            // Ensure parent directory exists
+            ensureDir(path.dirname(destFile));
+
+            fs.writeFileSync(destFile, entry.getData());
+            overridesExtracted++;
+        }
+    } catch (err) {
+        console.error('Blad ekstrakcji overrides:', err.message);
+    }
+
+    // 6. Download mods from manifest
     const modsPath = getModsPath();
     ensureDir(modsPath);
 
@@ -301,45 +402,48 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
         imported: [],
         skipped: [],
         failed: [],
-        total: manifestFiles.length,
+        total: manifest.files.length,
+        server: {
+            id: targetServer.id,
+            name: targetServer.name,
+            gameVersion: mcVersion,
+            loaderType,
+            loaderVersion,
+        },
+        overridesExtracted,
     };
 
-    // 3. Process each mod from the manifest
-    for (const entry of manifestFiles) {
+    for (const entry of manifest.files) {
         const projectId = entry.projectID;
         const manifestFileId = entry.fileID;
-        const required = entry.required !== false; // default true
+        const required = entry.required !== false;
 
-        // Skip optional mods if not requested
         if (!required && !includeOptional) {
             results.skipped.push({
                 modId: projectId,
-                reason: 'Opcjonalny mod (includeOptional=false)',
+                reason: 'Opcjonalny mod',
             });
             continue;
         }
 
         try {
-            // Get mod details from CurseForge
             const depMod = await cfGetModById(projectId);
 
-            // Get file info - use specific fileID from manifest if available
+            // Get file info - use exact fileID from manifest
             let depFile;
             if (manifestFileId) {
                 try {
-                    const fileResult = await cfGetModpackFiles(projectId, manifestFileId);
-                    depFile = fileResult;
+                    depFile = await cfGetModpackFiles(projectId, manifestFileId);
                 } catch {
-                    // Fallback: search for latest file for the game version
                     const depFiles = await cfGetModFiles(projectId, {
-                        gameVersion,
+                        gameVersion: mcVersion,
                         pageSize: 1,
                     });
                     depFile = depFiles.data?.[0];
                 }
             } else {
                 const depFiles = await cfGetModFiles(projectId, {
-                    gameVersion,
+                    gameVersion: mcVersion,
                     pageSize: 1,
                 });
                 depFile = depFiles.data?.[0];
@@ -349,44 +453,45 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 results.failed.push({
                     modId: projectId,
                     name: depMod.name,
-                    error: `Nie znaleziono pliku moda`,
+                    error: 'Nie znaleziono pliku',
                 });
                 continue;
             }
 
             const safeFilename = sanitizeFilename(depFile.fileName);
 
-            // Check if already exists in database
-            const existingMod = Mod.findByFilename(safeFilename);
+            // Check if mod already exists
+            let existingMod = Mod.findByFilename(safeFilename);
             if (existingMod) {
+                // Mod exists - just assign to this server
+                Server.assignMod(targetServer.id, existingMod.id);
                 results.skipped.push({
                     modId: projectId,
                     name: depMod.name,
                     filename: safeFilename,
-                    reason: 'Już istnieje w bazie',
+                    reason: 'Juz istnieje - przypisano do serwera',
                 });
                 continue;
             }
 
-            // Get download URL
+            // Download
             const targetFileId = manifestFileId || depFile.id;
             const downloadUrl = await cfGetFileDownloadUrl(projectId, targetFileId);
             if (!downloadUrl) {
                 results.failed.push({
                     modId: projectId,
                     name: depMod.name,
-                    error: 'URL pobierania niedostępny (autor wyłączył)',
+                    error: 'URL niedostepny',
                 });
                 continue;
             }
 
-            // Download the mod file
             const downloadResponse = await fetch(downloadUrl);
             if (!downloadResponse.ok) {
                 results.failed.push({
                     modId: projectId,
                     name: depMod.name,
-                    error: `Pobieranie nieudane: ${downloadResponse.status}`,
+                    error: `HTTP ${downloadResponse.status}`,
                 });
                 continue;
             }
@@ -396,10 +501,8 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
             const destPath = path.join(modsPath, safeFilename);
             fs.writeFileSync(destPath, buffer);
 
-            // Calculate hash
             const sha256 = await calculateSHA256(destPath);
 
-            // Create DB record
             const newMod = Mod.create({
                 name: depMod.name,
                 filename: safeFilename,
@@ -415,15 +518,8 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 curseforge_url: depMod.links?.websiteUrl || null,
             });
 
-            // Auto-assign to all servers
-            try {
-                const allServers = Server.getAll();
-                for (const srv of allServers) {
-                    Server.assignMod(srv.id, newMod.id);
-                }
-            } catch (assignErr) {
-                // Non-critical
-            }
+            // Assign only to the target server
+            Server.assignMod(targetServer.id, newMod.id);
 
             results.imported.push({
                 id: newMod.id,
@@ -440,19 +536,25 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
         }
     }
 
-    // 4. Log the action
+    // 7. Log
     ActivityLog.logAdminAction('curseforge_import_modpack', {
         curseforgeId: modId,
         modpackName: cfModpack.name,
+        serverId: targetServer.id,
+        serverName: targetServer.name,
+        loaderType,
+        loaderVersion,
+        gameVersion: mcVersion,
         imported: results.imported.length,
         skipped: results.skipped.length,
         failed: results.failed.length,
         total: results.total,
+        overridesExtracted,
     }, getClientIp(req));
 
     res.json({
         success: true,
-        message: `Modpack "${cfModpack.name}": ${results.imported.length} zaimportowano, ${results.skipped.length} pominięto, ${results.failed.length} nieudanych`,
+        message: `Modpack "${cfModpack.name}": ${results.imported.length} zaimportowano, ${results.skipped.length} pominieto, ${results.failed.length} nieudanych. Serwer: ${targetServer.name} (${loaderType} ${loaderVersion || ''})`,
         data: results,
     });
 }));

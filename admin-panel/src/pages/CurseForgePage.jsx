@@ -5,9 +5,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
     Search, Download, Package, Loader2, ExternalLink,
-    Filter, ChevronLeft, ChevronRight, AlertCircle, Check, Box, X
+    Filter, ChevronLeft, ChevronRight, AlertCircle, Check, Box, X,
+    Plus, Server
 } from 'lucide-react';
-import { curseforgeApi } from '../api/client';
+import { curseforgeApi, serversApi } from '../api/client';
 import toast from 'react-hot-toast';
 
 const PAGE_SIZE = 20;
@@ -41,6 +42,14 @@ function CurseForgePage() {
 
     // Modpack import progress
     const [modpackProgress, setModpackProgress] = useState(null);
+
+    // Modpack server choice
+    const [serverMode, setServerMode] = useState('new'); // 'new' or 'existing'
+    const [servers, setServers] = useState([]);
+    const [selectedServerId, setSelectedServerId] = useState('');
+    const [newServerName, setNewServerName] = useState('');
+    const [newServerIp, setNewServerIp] = useState('');
+    const [newServerPort, setNewServerPort] = useState('25565');
 
     // Pobierz dostepne wersje MC przy starcie
     useEffect(() => {
@@ -141,6 +150,27 @@ function CurseForgePage() {
         setSelectedFileId('');
         setModFiles([]);
         setFilesLoading(true);
+        setModpackProgress(null);
+        setServerMode('new');
+        setNewServerName(mod.name);
+        setNewServerIp('');
+        setNewServerPort('25565');
+        setSelectedServerId('');
+
+        // Load servers list for modpack imports
+        if (activeTab === 'modpacks') {
+            try {
+                const srvResponse = await serversApi.getAll();
+                if (srvResponse.success) {
+                    setServers(srvResponse.data || []);
+                    if (srvResponse.data?.length > 0) {
+                        setSelectedServerId(String(srvResponse.data[0].id));
+                    }
+                }
+            } catch {
+                // Non-critical
+            }
+        }
 
         try {
             const params = {};
@@ -203,6 +233,19 @@ function CurseForgePage() {
             return;
         }
 
+        // Validate server choice
+        if (serverMode === 'new') {
+            if (!newServerName.trim()) {
+                toast.error('Podaj nazwe serwera');
+                return;
+            }
+        } else {
+            if (!selectedServerId) {
+                toast.error('Wybierz serwer');
+                return;
+            }
+        }
+
         setImporting(true);
         setModpackProgress({
             total: 0,
@@ -213,14 +256,25 @@ function CurseForgePage() {
         });
 
         try {
-            const response = await curseforgeApi.importModpack({
+            const payload = {
                 modId: importModal.mod.id,
-                fileId: parseInt(selectedFileId)
-            });
+                fileId: parseInt(selectedFileId),
+            };
+
+            if (serverMode === 'new') {
+                payload.createServer = {
+                    name: newServerName.trim(),
+                    ip: newServerIp.trim() || 'localhost',
+                    port: parseInt(newServerPort) || 25565,
+                };
+            } else {
+                payload.serverId = parseInt(selectedServerId);
+            }
+
+            const response = await curseforgeApi.importModpack(payload);
 
             if (response.success) {
                 const result = response.data || {};
-                // Backend returns imported/skipped/failed as arrays
                 const importedCount = Array.isArray(result.imported) ? result.imported.length : (result.imported || 0);
                 const failedCount = Array.isArray(result.failed) ? result.failed.length : (result.failed || 0);
                 const importedItems = (Array.isArray(result.imported) ? result.imported : []).map(i => ({ ...i, success: true }));
@@ -230,9 +284,12 @@ function CurseForgePage() {
                     imported: importedCount,
                     failed: failedCount,
                     items: [...importedItems, ...failedItems],
+                    server: result.server || null,
+                    overridesExtracted: result.overridesExtracted || 0,
                     done: true
                 });
-                toast.success(`Modpack zaimportowany: ${importedCount}/${result.total || 0} modow`);
+                const serverInfo = result.server ? ` -> ${result.server.name} (${result.server.loaderType} ${result.server.loaderVersion || ''})` : '';
+                toast.success(`Modpack zaimportowany: ${importedCount}/${result.total || 0} modow${serverInfo}`);
             } else {
                 toast.error(response.error || 'Blad importu modpacka');
                 setModpackProgress(null);
@@ -563,10 +620,27 @@ function CurseForgePage() {
                                 {/* Podsumowanie */}
                                 {modpackProgress.done && (
                                     <div className="p-3 bg-mc-gray/50 rounded-lg space-y-1 text-sm">
+                                        {modpackProgress.server && (
+                                            <div className="mb-2 pb-2 border-b border-mc-gray">
+                                                <p className="text-white flex items-center gap-2 font-medium">
+                                                    <Server className="w-4 h-4 text-mc-green" />
+                                                    {modpackProgress.server.name}
+                                                </p>
+                                                <p className="text-gray-400 text-xs ml-6">
+                                                    MC {modpackProgress.server.gameVersion} / {modpackProgress.server.loaderType} {modpackProgress.server.loaderVersion || ''}
+                                                </p>
+                                            </div>
+                                        )}
                                         <p className="text-green-400 flex items-center gap-2">
                                             <Check className="w-4 h-4" />
-                                            Zaimportowano: {modpackProgress.imported}
+                                            Zaimportowano modow: {modpackProgress.imported}
                                         </p>
+                                        {modpackProgress.overridesExtracted > 0 && (
+                                            <p className="text-blue-400 flex items-center gap-2">
+                                                <Check className="w-4 h-4" />
+                                                Rozpakowano plikow (config/resourcepacks): {modpackProgress.overridesExtracted}
+                                            </p>
+                                        )}
                                         {modpackProgress.failed > 0 && (
                                             <p className="text-red-400 flex items-center gap-2">
                                                 <AlertCircle className="w-4 h-4" />
@@ -641,6 +715,93 @@ function CurseForgePage() {
                                                 ))}
                                             </select>
                                         </div>
+
+                                        {/* Server choice - only for modpacks */}
+                                        {activeTab === 'modpacks' && (
+                                            <div className="space-y-3 p-3 bg-mc-gray/30 rounded-lg border border-mc-gray">
+                                                <label className="label mb-0">Docelowy serwer</label>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setServerMode('new')}
+                                                        className={`flex-1 py-2 px-3 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                                                            serverMode === 'new'
+                                                                ? 'bg-orange-500/20 border border-orange-500 text-orange-400'
+                                                                : 'bg-mc-gray border border-transparent text-gray-400 hover:text-gray-300'
+                                                        }`}
+                                                    >
+                                                        <Plus className="w-4 h-4" />
+                                                        Nowy serwer
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setServerMode('existing')}
+                                                        className={`flex-1 py-2 px-3 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors ${
+                                                            serverMode === 'existing'
+                                                                ? 'bg-orange-500/20 border border-orange-500 text-orange-400'
+                                                                : 'bg-mc-gray border border-transparent text-gray-400 hover:text-gray-300'
+                                                        }`}
+                                                    >
+                                                        <Server className="w-4 h-4" />
+                                                        Istniejacy
+                                                    </button>
+                                                </div>
+
+                                                {serverMode === 'new' ? (
+                                                    <div className="space-y-2">
+                                                        <input
+                                                            type="text"
+                                                            value={newServerName}
+                                                            onChange={(e) => setNewServerName(e.target.value)}
+                                                            placeholder="Nazwa serwera"
+                                                            className="input w-full"
+                                                        />
+                                                        <div className="flex gap-2">
+                                                            <input
+                                                                type="text"
+                                                                value={newServerIp}
+                                                                onChange={(e) => setNewServerIp(e.target.value)}
+                                                                placeholder="IP serwera (opcjonalne)"
+                                                                className="input flex-1"
+                                                            />
+                                                            <input
+                                                                type="number"
+                                                                value={newServerPort}
+                                                                onChange={(e) => setNewServerPort(e.target.value)}
+                                                                placeholder="Port"
+                                                                className="input w-24"
+                                                            />
+                                                        </div>
+                                                        <p className="text-xs text-gray-500">
+                                                            Wersja MC, loader i Java zostana ustawione automatycznie z paczki
+                                                        </p>
+                                                    </div>
+                                                ) : (
+                                                    <div>
+                                                        {servers.length > 0 ? (
+                                                            <>
+                                                                <select
+                                                                    value={selectedServerId}
+                                                                    onChange={(e) => setSelectedServerId(e.target.value)}
+                                                                    className="input w-full"
+                                                                >
+                                                                    {servers.map((srv) => (
+                                                                        <option key={srv.id} value={String(srv.id)}>
+                                                                            {srv.name} ({srv.game_version || srv.gameVersion} / {srv.loader_type || srv.loaderType})
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+                                                                <p className="text-xs text-yellow-500 mt-1">
+                                                                    Konfiguracja serwera zostanie nadpisana danymi z paczki
+                                                                </p>
+                                                            </>
+                                                        ) : (
+                                                            <p className="text-gray-400 text-sm">Brak serwerow - utworz nowy</p>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
 
                                         <div className="flex gap-3 pt-2">
                                             <button

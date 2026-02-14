@@ -10,6 +10,7 @@ import { Server, Mod, ActivityLog } from '../../models/index.js';
 import { requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getClientIp, getUploadsPath, ensureDir, calculateSHA256, isAllowedModFile } from '../../utils/helpers.js';
+import { pingMinecraftServer } from '../../utils/mcPing.js';
 
 const router = Router();
 
@@ -192,6 +193,78 @@ router.post('/servers/:id/toggle',
         });
     })
 );
+
+/**
+ * GET /api/admin/servers/status
+ * Pobiera status (ping) wszystkich włączonych serwerów
+ * Domyślny serwer jest na pierwszym miejscu
+ */
+router.get('/servers/status', asyncHandler(async (req, res) => {
+    const servers = Server.getEnabled();
+
+    // Sort: default server first, then by display_order
+    servers.sort((a, b) => {
+        if (a.is_default && !b.is_default) return -1;
+        if (!a.is_default && b.is_default) return 1;
+        return (a.display_order || 0) - (b.display_order || 0);
+    });
+
+    const results = [];
+    let totalPlayersOnline = 0;
+    let onlineServers = 0;
+
+    for (const srv of servers) {
+        let pingData = {
+            online: false,
+            players: { online: 0, max: 0, sample: [] },
+            version: null,
+            latency: null,
+        };
+
+        try {
+            if (srv.ip && !srv.maintenance_mode) {
+                const ping = await pingMinecraftServer(srv.ip, srv.port || 25565, 5000);
+                if (ping.online) {
+                    pingData = {
+                        online: true,
+                        players: ping.players || { online: 0, max: 0, sample: [] },
+                        version: ping.version,
+                        latency: ping.latency,
+                    };
+                    onlineServers++;
+                    totalPlayersOnline += ping.players?.online || 0;
+                }
+            }
+        } catch {
+            // Ping failed - server offline
+        }
+
+        results.push({
+            id: srv.id,
+            name: srv.name,
+            description: srv.description,
+            ip: srv.ip,
+            port: srv.port,
+            isDefault: !!srv.is_default,
+            gameVersion: srv.game_version,
+            loaderType: srv.loader_type,
+            maintenanceMode: !!srv.maintenance_mode,
+            ...pingData,
+        });
+    }
+
+    res.json({
+        success: true,
+        data: {
+            servers: results,
+            summary: {
+                totalServers: servers.length,
+                onlineServers,
+                totalPlayersOnline,
+            },
+        },
+    });
+}));
 
 /**
  * POST /api/admin/servers/reorder

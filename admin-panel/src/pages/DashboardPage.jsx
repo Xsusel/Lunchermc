@@ -159,7 +159,11 @@ function DashboardPage() {
 
                 {serversStatus?.servers?.length > 0 ? (
                     <div className="space-y-3">
-                        {serversStatus.servers.map((srv) => (
+                        {[...serversStatus.servers].sort((a, b) => {
+                            if (a.isDefault && !b.isDefault) return -1;
+                            if (!a.isDefault && b.isDefault) return 1;
+                            return 0;
+                        }).map((srv) => (
                             <div key={srv.id} className={`p-4 rounded-lg border flex items-center gap-4 ${
                                 srv.online
                                     ? 'bg-green-900/10 border-green-800/50'
@@ -171,7 +175,7 @@ function DashboardPage() {
                                     <WifiOff className="w-6 h-6 text-red-500 flex-shrink-0" />
                                 )}
                                 <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2 flex-wrap">
                                         <p className="font-medium text-white">{srv.name}</p>
                                         {srv.isDefault && (
                                             <span className="px-1.5 py-0.5 text-xs bg-mc-accent/20 text-mc-accent rounded">Domyslny</span>
@@ -179,6 +183,11 @@ function DashboardPage() {
                                         <span className={`text-xs ${srv.online ? 'text-green-400' : 'text-red-400'}`}>
                                             {srv.online ? 'ONLINE' : 'OFFLINE'}
                                         </span>
+                                        {srv.loaderType && srv.loaderType !== 'vanilla' && (
+                                            <span className="px-1.5 py-0.5 text-xs bg-purple-900/30 text-purple-400 rounded">
+                                                {srv.gameVersion} / {srv.loaderType}
+                                            </span>
+                                        )}
                                     </div>
                                     <p className="text-xs text-gray-500 font-mono">{srv.ip}:{srv.port || 25565}</p>
                                 </div>

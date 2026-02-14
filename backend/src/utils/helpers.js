@@ -177,11 +177,30 @@ export const getUploadsPath = () => {
 };
 
 /**
- * Ścieżka do katalogu modów
+ * Ścieżka do katalogu modów (globalny)
  * @returns {string} Ścieżka absolutna
  */
 export const getModsPath = () => {
     return path.join(getUploadsPath(), 'mods');
+};
+
+/**
+ * Ścieżka bazowa do folderów serwera
+ * @param {number} serverId - ID serwera
+ * @returns {string} Ścieżka absolutna np. /uploads/servers/3
+ */
+export const getServerPath = (serverId) => {
+    return path.join(getUploadsPath(), 'servers', String(serverId));
+};
+
+/**
+ * Ścieżka do konkretnego podfolderu serwera (mods, config, resourcepacks, etc.)
+ * @param {number} serverId - ID serwera
+ * @param {string} subdir - Podfolder np. 'mods', 'config', 'resourcepacks'
+ * @returns {string} Ścieżka absolutna
+ */
+export const getServerSubPath = (serverId, subdir) => {
+    return path.join(getServerPath(serverId), subdir);
 };
 
 /**
