@@ -508,18 +508,25 @@ class GameManager {
 
                 request.on('error', (err) => retryOrFail(err));
 
-                // Timeout - 2 minuty
-                request.setTimeout(120000, () => {
+                // Timeout - 30 sekund na nawiązanie połączenia
+                request.setTimeout(30000, () => {
                     request.destroy();
                     retryOrFail(new Error('Download timeout'));
                 });
 
                 // Sprawdź czy pobieranie się nie zawiesiło
+                // (30s bez danych jeśli coś przyszło, 15s jeśli nic nie przyszło)
                 const stallCheck = setInterval(() => {
-                    if (Date.now() - lastProgressTime > 30000 && downloadedBytes > startByte) {
+                    const timeSinceProgress = Date.now() - lastProgressTime;
+                    if (downloadedBytes > startByte && timeSinceProgress > 30000) {
                         clearInterval(stallCheck);
                         request.destroy();
                         retryOrFail(new Error('Download stalled'));
+                    } else if (downloadedBytes === startByte && timeSinceProgress > 15000) {
+                        // Serwer nie wysłał żadnych danych - nie czekaj 2 min
+                        clearInterval(stallCheck);
+                        request.destroy();
+                        retryOrFail(new Error('No data received'));
                     }
                 }, 5000);
 
