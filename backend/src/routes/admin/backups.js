@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import { ActivityLog } from '../../models/index.js';
-import { authenticateAdmin } from '../../middleware/index.js';
+import { authenticateAdmin, requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getClientIp } from '../../utils/helpers.js';
 import {
@@ -13,6 +13,10 @@ import {
 } from '../../utils/backup.js';
 
 const router = Router();
+
+// Wszystkie trasy backupów wymagają roli admin
+router.use('/backups', requireRole('admin'));
+router.use('/backups/*', requireRole('admin'));
 
 /**
  * GET /api/admin/backups

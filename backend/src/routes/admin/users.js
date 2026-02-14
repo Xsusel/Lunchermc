@@ -7,6 +7,7 @@ import { body } from 'express-validator';
 import { User, ActivityLog } from '../../models/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getClientIp } from '../../utils/helpers.js';
+import { notifyBan } from '../../utils/discord.js';
 
 const router = Router();
 
@@ -85,6 +86,9 @@ router.post('/users/:id/ban',
             username: user.username,
             reason
         }, getClientIp(req));
+
+        // Powiadomienie Discord (async, nie blokuje odpowiedzi)
+        notifyBan(user.username, reason || '').catch(() => {});
 
         res.json({
             success: true,

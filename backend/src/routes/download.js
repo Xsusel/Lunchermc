@@ -16,6 +16,29 @@ const router = Router();
 router.use(downloadLimiter);
 
 /**
+ * Weryfikuje że ścieżka pliku nie wychodzi poza dozwolony katalog
+ * @param {string} baseDir - Dozwolony katalog bazowy
+ * @param {string} filename - Nazwa pliku do sprawdzenia
+ * @returns {string|null} Bezpieczna ścieżka lub null
+ */
+function safePath(baseDir, filename) {
+    // Podstawowa walidacja nazwy pliku
+    if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        return null;
+    }
+
+    const resolvedBase = path.resolve(baseDir);
+    const resolvedPath = path.resolve(baseDir, filename);
+
+    // Sprawdź czy ścieżka jest w dozwolonym katalogu
+    if (!resolvedPath.startsWith(resolvedBase + path.sep) && resolvedPath !== resolvedBase) {
+        return null;
+    }
+
+    return resolvedPath;
+}
+
+/**
  * GET /api/download/mods/:filename
  * Pobiera plik moda
  */
@@ -39,8 +62,11 @@ router.get('/mods/:filename', asyncHandler(async (req, res) => {
         });
     }
 
-    // Ścieżka do pliku
-    const filePath = path.join(getModsPath(), filename);
+    // Ścieżka do pliku z ochroną path traversal
+    const filePath = safePath(getModsPath(), filename);
+    if (!filePath) {
+        return res.status(400).json({ success: false, error: 'Nieprawidłowa nazwa pliku' });
+    }
 
     // Sprawdzamy czy plik istnieje na dysku
     if (!fs.existsSync(filePath)) {
@@ -93,8 +119,8 @@ router.head('/mods/:filename', asyncHandler(async (req, res) => {
         return res.status(404).end();
     }
 
-    const filePath = path.join(getModsPath(), filename);
-    if (!fs.existsSync(filePath)) {
+    const filePath = safePath(getModsPath(), filename);
+    if (!filePath || !fs.existsSync(filePath)) {
         return res.status(404).end();
     }
 
@@ -114,9 +140,12 @@ router.head('/mods/:filename', asyncHandler(async (req, res) => {
 router.get('/launcher/:filename', asyncHandler(async (req, res) => {
     const { filename } = req.params;
 
-    // Ścieżka do plików launchera
+    // Ścieżka do plików launchera z ochroną path traversal
     const launcherPath = path.join(getModsPath(), '..', 'launcher');
-    const filePath = path.join(launcherPath, filename);
+    const filePath = safePath(launcherPath, filename);
+    if (!filePath) {
+        return res.status(400).json({ success: false, error: 'Nieprawidłowa nazwa pliku' });
+    }
 
     // Sprawdzamy czy plik istnieje
     if (!fs.existsSync(filePath)) {
@@ -129,11 +158,28 @@ router.get('/launcher/:filename', asyncHandler(async (req, res) => {
     const stat = fs.statSync(filePath);
 
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Accept-Ranges', 'bytes');
 
-    const stream = fs.createReadStream(filePath);
-    stream.pipe(res);
+    // Obsługujemy zakresowe pobieranie (Range requests) dla resume
+    const range = req.headers.range;
+    if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        const chunkSize = end - start + 1;
+
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+        res.setHeader('Content-Length', chunkSize);
+        res.status(206);
+
+        const stream = fs.createReadStream(filePath, { start, end });
+        stream.pipe(res);
+    } else {
+        res.setHeader('Content-Length', stat.size);
+        const stream = fs.createReadStream(filePath);
+        stream.pipe(res);
+    }
 }));
 
 /**
@@ -143,16 +189,11 @@ router.get('/launcher/:filename', asyncHandler(async (req, res) => {
 router.get('/skins/:filename', asyncHandler(async (req, res) => {
     const { filename } = req.params;
 
-    // Zabezpieczenie przed path traversal
-    if (filename.includes('..') || filename.includes('/')) {
-        return res.status(400).json({
-            success: false,
-            error: 'Nieprawidlowa nazwa pliku'
-        });
+    // Ścieżka z ochroną path traversal
+    const filePath = safePath(Skin.getSkinsPath(), filename);
+    if (!filePath) {
+        return res.status(400).json({ success: false, error: 'Nieprawidlowa nazwa pliku' });
     }
-
-    // Sprawdzamy czy plik istnieje na dysku
-    const filePath = path.join(Skin.getSkinsPath(), filename);
 
     if (!fs.existsSync(filePath)) {
         return res.status(404).json({
@@ -179,16 +220,11 @@ router.get('/skins/:filename', asyncHandler(async (req, res) => {
 router.get('/capes/:filename', asyncHandler(async (req, res) => {
     const { filename } = req.params;
 
-    // Zabezpieczenie przed path traversal
-    if (filename.includes('..') || filename.includes('/')) {
-        return res.status(400).json({
-            success: false,
-            error: 'Nieprawidlowa nazwa pliku'
-        });
+    // Ścieżka z ochroną path traversal
+    const filePath = safePath(Skin.getCapesPath(), filename);
+    if (!filePath) {
+        return res.status(400).json({ success: false, error: 'Nieprawidlowa nazwa pliku' });
     }
-
-    // Sprawdzamy czy plik istnieje na dysku
-    const filePath = path.join(Skin.getCapesPath(), filename);
 
     if (!fs.existsSync(filePath)) {
         return res.status(404).json({

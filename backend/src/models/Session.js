@@ -9,41 +9,8 @@
 import db from '../config/database.js';
 import crypto from 'crypto';
 
-// Migracja - dodaj nowe kolumny jeśli nie istnieją
-try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN ip_address TEXT;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN user_agent TEXT;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN device_info TEXT;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN is_active INTEGER DEFAULT 1;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN last_activity DATETIME;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN revoked_at DATETIME;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN revoked_reason TEXT;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-// Dodaj indeksy
-db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, is_active);
-    CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active, expires_at);
-    CREATE INDEX IF NOT EXISTS idx_sessions_ip ON sessions(ip_address);
-`);
+// NOTE: Column migrations and index creation have been moved to
+// /config/migrations.js (migrations 6 and 7). They run at startup.
 
 class Session {
     /**

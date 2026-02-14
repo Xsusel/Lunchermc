@@ -15,8 +15,8 @@ class Mod {
      */
     static create(modData) {
         const stmt = db.prepare(`
-            INSERT INTO mods (name, filename, url, sha256, file_size, is_required, is_enabled, mod_type, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO mods (name, filename, url, sha256, file_size, is_required, is_enabled, mod_type, description, curseforge_id, curseforge_file_id, curseforge_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const result = stmt.run(
@@ -28,7 +28,10 @@ class Mod {
             modData.is_required !== false ? 1 : 0,
             modData.is_enabled !== false ? 1 : 0,
             modData.mod_type || 'mod',
-            modData.description || null
+            modData.description || null,
+            modData.curseforge_id || null,
+            modData.curseforge_file_id || null,
+            modData.curseforge_url || null
         );
 
         return this.findById(result.lastInsertRowid);
@@ -97,7 +100,8 @@ class Mod {
     static update(id, data) {
         const allowedFields = [
             'name', 'filename', 'url', 'sha256', 'file_size',
-            'is_required', 'is_enabled', 'mod_type', 'description'
+            'is_required', 'is_enabled', 'mod_type', 'description',
+            'curseforge_id', 'curseforge_file_id', 'curseforge_url'
         ];
 
         const updates = [];

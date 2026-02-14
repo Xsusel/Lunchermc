@@ -18,7 +18,8 @@ const state = {
     pendingRules: null,
     servers: [],
     selectedServerId: null,
-    serverStatuses: {}
+    serverStatuses: {},
+    isOffline: false
 };
 
 // ============================================
@@ -84,7 +85,18 @@ const elements = {
     btnOpenFolder: document.getElementById('btn-open-folder'),
     btnResetSettings: document.getElementById('btn-reset-settings'),
     btnSaveSettings: document.getElementById('btn-save-settings'),
+    apiUrl: document.getElementById('api-url'),
+    btnApiUrlReset: document.getElementById('btn-api-url-reset'),
     launcherVersion: document.getElementById('launcher-version'),
+
+    // Logi gry
+    logSessionSelect: document.getElementById('log-session-select'),
+    btnLogsClear: document.getElementById('btn-logs-clear'),
+    btnLogsCopy: document.getElementById('btn-logs-copy'),
+    btnLogsFolder: document.getElementById('btn-logs-folder'),
+    logsAutoscroll: document.getElementById('logs-autoscroll'),
+    logsContainer: document.getElementById('logs-container'),
+    logsOutput: document.getElementById('logs-output'),
 
     // Modale
     loginModal: document.getElementById('login-modal'),
@@ -193,6 +205,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Inicjalizuj system aktualizacji
     initAutoUpdate();
 
+    // Inicjalizuj tryb offline (nasłuchuj zmian statusu sieci)
+    initOfflineMode();
+
+    // Sprawdź czy są niedawne raporty o awariach
+    await checkRecentCrashReports();
+
     console.log('XsusLauncher gotowy!');
 });
 
@@ -295,6 +313,11 @@ function switchPage(pageName) {
     elements.pages.forEach(page => {
         page.classList.toggle('active', page.id === `page-${pageName}`);
     });
+
+    // Odśwież dane specyficzne dla strony
+    if (pageName === 'logs') {
+        loadLogSessions();
+    }
 }
 
 // ============================================
@@ -461,6 +484,12 @@ async function handleLogin(e) {
 async function handleRegister(e) {
     e.preventDefault();
 
+    // Blokuj rejestrację w trybie offline
+    if (state.isOffline || window.isOffline) {
+        showRegisterError('Rejestracja jest niedostępna w trybie offline');
+        return;
+    }
+
     const username = elements.registerUsername.value.trim();
     const password = elements.registerPassword.value;
     const passwordConfirm = elements.registerPasswordConfirm.value;
@@ -520,8 +549,17 @@ async function loadSavedSession() {
                     updateUserUI();
                 }
             } catch {
-                // Token nieważny - wyczyść
-                await window.electronAPI?.deleteStore('token');
+                // Jeśli jesteśmy offline, użyj zapisanego username bez weryfikacji
+                if (window.isOffline) {
+                    console.log('[Offline] Używam zapisanej sesji bez weryfikacji tokenu');
+                    state.user = { username: username };
+                    state.token = token;
+                    state.isLoggedIn = true;
+                    updateUserUI();
+                } else {
+                    // Token nieważny - wyczyść
+                    await window.electronAPI?.deleteStore('token');
+                }
             }
         }
     } catch (error) {
@@ -582,53 +620,36 @@ async function loadServerConfig() {
         const response = await api.getLauncherConfig();
 
         if (response.success) {
-            state.config = response.data;
+            applyServerConfig(response.data);
 
-            // Aktualizuj UI
-            const config = response.data.config;
-
-            let versionText = config.gameVersion;
-            if (config.loaderType !== 'vanilla') {
-                versionText += ` (${config.loaderType})`;
+            // Jeśli byliśmy offline - przywróć
+            if (state.isOffline) {
+                state.isOffline = false;
+                window.isOffline = false;
+                removeOfflineIndicator();
+                updateOfflineUI();
             }
-            elements.gameVersion.textContent = versionText;
-
-            // Liczba modów
-            const modsFromMods = response.data.mods?.length || 0;
-            const modsFromFiles = response.data.files?.filter(f => f.type === 'mod').length || 0;
-            const modsCount = Math.max(modsFromMods, modsFromFiles);
-            if (elements.modsCount) {
-                elements.modsCount.textContent = modsCount;
-            }
-
-            // Serwery
-            state.servers = response.data.servers || [];
-
-            // Przywróć zapisany wybór serwera
-            const savedServerId = await window.electronAPI?.getStore('selectedServerId');
-            if (savedServerId && state.servers.find(s => s.id === savedServerId)) {
-                state.selectedServerId = savedServerId;
-            } else {
-                // Wybierz domyślny serwer
-                const defaultServer = state.servers.find(s => s.isDefault) || state.servers[0];
-                state.selectedServerId = defaultServer?.id || null;
-            }
-
-            // Renderuj listę serwerów
-            renderServerList();
-
-            // Wyświetl powiadomienia
-            displayBroadcasts(response.data.broadcasts);
-
-            // Pobierz statusy serwerów
-            loadAllServerStatuses();
-
-            // Maintenance check
-            state.serverOnline = !config.maintenanceMode;
-            updateUserUI();
         }
     } catch (error) {
         console.error('Błąd ładowania konfiguracji:', error);
+
+        // Próba załadowania z cache (electron-store) jeśli offline
+        try {
+            const cachedResult = await window.electronAPI?.getCachedConfig();
+            if (cachedResult && cachedResult.success && cachedResult.data) {
+                console.log('[Offline] Ładowanie konfiguracji z cache');
+                const cachedData = cachedResult.data.data || cachedResult.data;
+                applyServerConfig(cachedData);
+                state.isOffline = true;
+                window.isOffline = true;
+                showOfflineIndicator();
+                updateOfflineUI();
+                return;
+            }
+        } catch (cacheError) {
+            console.warn('Nie udało się załadować konfiguracji z cache:', cacheError);
+        }
+
         if (elements.serverList) {
             elements.serverList.innerHTML = '<div class="server-list-empty">Brak połączenia z serwerem API</div>';
         }
@@ -636,6 +657,58 @@ async function loadServerConfig() {
 
         showToast('Nie można połączyć z serwerem', 'error');
     }
+}
+
+/**
+ * Aplikuje dane konfiguracyjne serwera do UI
+ */
+async function applyServerConfig(data) {
+    state.config = data;
+
+    // Aktualizuj UI
+    const config = data.config;
+
+    let versionText = config.gameVersion;
+    if (config.loaderType !== 'vanilla') {
+        versionText += ` (${config.loaderType})`;
+    }
+    elements.gameVersion.textContent = versionText;
+
+    // Liczba modów
+    const modsFromMods = data.mods?.length || 0;
+    const modsFromFiles = data.files?.filter(f => f.type === 'mod').length || 0;
+    const modsCount = Math.max(modsFromMods, modsFromFiles);
+    if (elements.modsCount) {
+        elements.modsCount.textContent = modsCount;
+    }
+
+    // Serwery
+    state.servers = data.servers || [];
+
+    // Przywróć zapisany wybór serwera
+    const savedServerId = await window.electronAPI?.getStore('selectedServerId');
+    if (savedServerId && state.servers.find(s => s.id === savedServerId)) {
+        state.selectedServerId = savedServerId;
+    } else {
+        // Wybierz domyślny serwer
+        const defaultServer = state.servers.find(s => s.isDefault) || state.servers[0];
+        state.selectedServerId = defaultServer?.id || null;
+    }
+
+    // Renderuj listę serwerów
+    renderServerList();
+
+    // Wyświetl powiadomienia
+    displayBroadcasts(data.broadcasts);
+
+    // Pobierz statusy serwerów (tylko jeśli online)
+    if (!state.isOffline) {
+        loadAllServerStatuses();
+    }
+
+    // Maintenance check
+    state.serverOnline = !config.maintenanceMode;
+    updateUserUI();
 }
 
 /**
@@ -799,7 +872,8 @@ function initPlayButton() {
 
 async function handlePlay() {
     // Blokada gry gdy wymagana aktualizacja jest dostępna
-    if (pendingUpdate?.isRequired) {
+    // Ale pozwól grać jeśli serwer aktualizacji jest niedostępny (3+ nieudane próby)
+    if (pendingUpdate?.isRequired && pendingUpdate?._updateServerReachable !== false) {
         showUpdateModal(pendingUpdate);
         showToast('Wymagana aktualizacja launchera. Pobierz ją, aby kontynuować.', 'warning');
         return;
@@ -1019,11 +1093,41 @@ async function initSettings() {
     // Przycisk auto-instalacji Java
     elements.btnJavaInstall?.addEventListener('click', handleAutoInstallJava);
 
+    // API URL
+    try {
+        const currentApiUrl = await window.electronAPI?.getApiUrl();
+        const storeApiUrl = await window.electronAPI?.getStore('apiUrl');
+        if (elements.apiUrl) {
+            // Pokaż zapisaną wartość (puste = domyślny)
+            elements.apiUrl.value = storeApiUrl || '';
+            elements.apiUrl.placeholder = `${currentApiUrl} (domyślny)`;
+        }
+    } catch (e) {
+        console.warn('Błąd ładowania API URL:', e);
+    }
+
+    elements.btnApiUrlReset?.addEventListener('click', async () => {
+        if (elements.apiUrl) {
+            elements.apiUrl.value = '';
+        }
+        await window.electronAPI?.setApiUrl('');
+        const resolvedUrl = await window.electronAPI?.getApiUrl();
+        if (elements.apiUrl) {
+            elements.apiUrl.placeholder = `${resolvedUrl} (domyślny)`;
+        }
+        // Aktualizuj api client
+        api.updateBaseUrl(resolvedUrl);
+        showToast('URL API przywrócony do domyślnego', 'info');
+    });
+
     // Sprawdz status Java
     await checkJavaStatus();
 
     // Inicjalizuj selektor motywów
     await initThemeSelector();
+
+    // Inicjalizuj logi gry
+    initGameLogs();
 }
 
 /**
@@ -1103,6 +1207,7 @@ async function saveSettings() {
                 min: parseInt(elements.ramMin.value),
                 max: parseInt(elements.ramMax.value)
             },
+            ramManuallyConfigured: true,
             javaPath: elements.javaPath.value,
             customJavaArgs: elements.customJavaArgs.value,
             resolution: {
@@ -1119,6 +1224,7 @@ async function saveSettings() {
             min: parseInt(elements.ramMin.value),
             max: parseInt(elements.ramMax.value)
         });
+        await window.electronAPI?.setStore('ramManuallyConfigured', true);
         await window.electronAPI?.setStore('javaPath', elements.javaPath.value);
         await window.electronAPI?.setStore('customJavaArgs', elements.customJavaArgs.value);
         await window.electronAPI?.setStore('resolution', {
@@ -1128,6 +1234,14 @@ async function saveSettings() {
         });
         await window.electronAPI?.setStore('closeOnLaunch', elements.closeOnLaunch.checked);
         await window.electronAPI?.setStore('autoUpdate', elements.autoUpdate.checked);
+    }
+
+    // Zapisz API URL osobno (wymaga specjalnej obsługi)
+    const newApiUrl = elements.apiUrl?.value?.trim() || '';
+    const result = await window.electronAPI?.setApiUrl(newApiUrl);
+    if (result?.success) {
+        // Aktualizuj api client w rendererze
+        api.updateBaseUrl(result.apiUrl);
     }
 
     showToast('Ustawienia zapisane!', 'success');
@@ -1147,6 +1261,7 @@ async function resetSettings() {
     elements.fullscreen.checked = false;
     elements.closeOnLaunch.checked = false;
     elements.autoUpdate.checked = true;
+    if (elements.apiUrl) elements.apiUrl.value = '';
 
     await saveSettings();
     showToast('Ustawienia przywrócone do domyślnych', 'info');
@@ -1675,6 +1790,241 @@ async function handleAutoInstallJava() {
 }
 
 // ============================================
+// LOGI GRY
+// ============================================
+
+// Stan logów
+const logState = {
+    entries: [],
+    maxEntries: 5000,
+    autoscroll: true,
+    currentSession: 'current'
+};
+
+/**
+ * Inicjalizuje panel logów gry
+ */
+function initGameLogs() {
+    // Auto-scroll checkbox
+    elements.logsAutoscroll?.addEventListener('change', (e) => {
+        logState.autoscroll = e.target.checked;
+        if (logState.autoscroll) {
+            scrollLogsToBottom();
+        }
+    });
+
+    // Wyczyść logi
+    elements.btnLogsClear?.addEventListener('click', () => {
+        logState.entries = [];
+        renderLogs();
+    });
+
+    // Kopiuj logi
+    elements.btnLogsCopy?.addEventListener('click', () => {
+        const logText = logState.entries.map(e => `[${e.time}] ${e.line}`).join('\n');
+        if (navigator.clipboard && logText) {
+            navigator.clipboard.writeText(logText).then(() => {
+                showToast('Logi skopiowane do schowka', 'success');
+            }).catch(() => {
+                showToast('Nie udało się skopiować logów', 'error');
+            });
+        } else if (!logText) {
+            showToast('Brak logów do skopiowania', 'info');
+        }
+    });
+
+    // Otwórz folder logów
+    elements.btnLogsFolder?.addEventListener('click', () => {
+        window.electronAPI?.openLogsFolder();
+    });
+
+    // Selektor sesji
+    elements.logSessionSelect?.addEventListener('change', async (e) => {
+        const value = e.target.value;
+        logState.currentSession = value;
+
+        if (value === 'current') {
+            // Załaduj bieżące logi z pamięci
+            const currentLogs = await window.electronAPI?.getCurrentLogs();
+            logState.entries = currentLogs || [];
+            renderLogs();
+        } else {
+            // Załaduj logi z pliku
+            const content = await window.electronAPI?.readLogFile(value);
+            if (content) {
+                // Parsuj plik logu na wpisy
+                logState.entries = content.split('\n')
+                    .filter(line => line.trim())
+                    .map(line => {
+                        const match = line.match(/^\[(.+?)\] (.*)$/);
+                        if (match) {
+                            return { time: match[1], line: match[2] };
+                        }
+                        return { time: '', line: line };
+                    });
+                renderLogs();
+            } else {
+                logState.entries = [];
+                renderLogs();
+                showToast('Nie udało się odczytać pliku logu', 'error');
+            }
+        }
+    });
+
+    // Nasłuchuj logów w real-time
+    window.electronAPI?.onGameLog((entry) => {
+        if (logState.currentSession === 'current') {
+            logState.entries.push(entry);
+
+            // Ogranicz liczbę wpisów w UI
+            if (logState.entries.length > logState.maxEntries) {
+                logState.entries.shift();
+            }
+
+            appendLogEntry(entry);
+        }
+    });
+
+    // Odśwież sesje logów po zamknięciu gry
+    gameLauncher.setGameCloseCallback((data) => {
+        // Odśwież listę sesji z opóźnieniem (poczekaj na zapis pliku)
+        setTimeout(() => {
+            loadLogSessions();
+        }, 1000);
+    });
+
+    // Załaduj listę sesji
+    loadLogSessions();
+}
+
+/**
+ * Ładuje listę dostępnych sesji logów
+ */
+async function loadLogSessions() {
+    if (!elements.logSessionSelect) return;
+
+    try {
+        const sessions = await window.electronAPI?.getLogSessions();
+
+        // Zachowaj opcję "Bieżąca sesja"
+        elements.logSessionSelect.innerHTML = '<option value="current">Bieżąca sesja</option>';
+
+        if (sessions && sessions.length > 0) {
+            for (const session of sessions) {
+                const option = document.createElement('option');
+                option.value = session.path;
+                const date = new Date(session.created);
+                const dateStr = date.toLocaleDateString('pl-PL');
+                const timeStr = date.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+                const sizeStr = formatBytes(session.size);
+                option.textContent = `${dateStr} ${timeStr} (${sizeStr})`;
+                elements.logSessionSelect.appendChild(option);
+            }
+        }
+    } catch (e) {
+        console.warn('Błąd ładowania sesji logów:', e);
+    }
+}
+
+/**
+ * Renderuje wszystkie logi
+ */
+function renderLogs() {
+    if (!elements.logsOutput) return;
+
+    if (logState.entries.length === 0) {
+        elements.logsOutput.innerHTML = '<div class="logs-empty">Brak logów. Uruchom grę, aby zobaczyć logi.</div>';
+        return;
+    }
+
+    // Renderuj tylko z ograniczeniem wydajnościowym
+    const fragment = document.createDocumentFragment();
+    const entriesToRender = logState.entries.slice(-2000); // Max 2000 w DOM
+
+    for (const entry of entriesToRender) {
+        const el = createLogElement(entry);
+        fragment.appendChild(el);
+    }
+
+    elements.logsOutput.innerHTML = '';
+    elements.logsOutput.appendChild(fragment);
+
+    if (logState.autoscroll) {
+        scrollLogsToBottom();
+    }
+}
+
+/**
+ * Tworzy element DOM dla wpisu logu
+ */
+function createLogElement(entry) {
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+
+    // Wykryj typ linii (error, warning, info)
+    const line = entry.line || '';
+    if (/error|exception|fatal|crash/i.test(line)) {
+        div.classList.add('log-error');
+    } else if (/warn|warning/i.test(line)) {
+        div.classList.add('log-warn');
+    } else if (/info/i.test(line)) {
+        div.classList.add('log-info');
+    }
+
+    if (entry.time) {
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'log-time';
+        // Pokaż tylko godzinę:minutę:sekundę
+        try {
+            const date = new Date(entry.time);
+            timeSpan.textContent = date.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        } catch (e) {
+            timeSpan.textContent = entry.time.substring(11, 19);
+        }
+        div.appendChild(timeSpan);
+    }
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'log-text';
+    textSpan.textContent = line;
+    div.appendChild(textSpan);
+
+    return div;
+}
+
+/**
+ * Dodaje pojedynczy wpis logu do panelu
+ */
+function appendLogEntry(entry) {
+    if (!elements.logsOutput) return;
+
+    // Usuń placeholder "brak logów"
+    const emptyMsg = elements.logsOutput.querySelector('.logs-empty');
+    if (emptyMsg) emptyMsg.remove();
+
+    const el = createLogElement(entry);
+    elements.logsOutput.appendChild(el);
+
+    // Ogranicz liczbę elementów DOM
+    while (elements.logsOutput.children.length > 2000) {
+        elements.logsOutput.removeChild(elements.logsOutput.firstChild);
+    }
+
+    if (logState.autoscroll) {
+        scrollLogsToBottom();
+    }
+}
+
+/**
+ * Przewija logi na dół
+ */
+function scrollLogsToBottom() {
+    if (elements.logsContainer) {
+        elements.logsContainer.scrollTop = elements.logsContainer.scrollHeight;
+    }
+}
+
+// ============================================
 // AUTO-UPDATE
 // ============================================
 
@@ -1728,6 +2078,15 @@ function initAutoUpdate() {
         if (elements.updateProgress) elements.updateProgress.style.display = 'none';
         if (elements.updateFooter) elements.updateFooter.style.display = 'none';
         if (elements.updateInstallFooter) elements.updateInstallFooter.style.display = 'flex';
+
+        // Dostosuj tekst przycisku w zależności od typu aktualizacji
+        if (elements.btnUpdateInstall) {
+            if (data?.nativeUpdate) {
+                elements.btnUpdateInstall.textContent = 'Uruchom ponownie i zaktualizuj';
+            } else {
+                elements.btnUpdateInstall.textContent = 'Zainstaluj i uruchom ponownie';
+            }
+        }
         showToast('Aktualizacja pobrana! Kliknij aby zainstalować.', 'success');
     });
 
@@ -1737,6 +2096,17 @@ function initAutoUpdate() {
         if (elements.btnUpdateNow) {
             elements.btnUpdateNow.disabled = false;
             elements.btnUpdateNow.textContent = 'Spróbuj ponownie';
+        }
+        // Jeśli aktualizacja jest wymagana ale serwer nieosiągalny,
+        // pozwól grać po 3 nieudanych próbach
+        if (pendingUpdate?.isRequired) {
+            pendingUpdate._failCount = (pendingUpdate._failCount || 0) + 1;
+            if (pendingUpdate._failCount >= 3) {
+                pendingUpdate._updateServerReachable = false;
+                showToast('Serwer aktualizacji niedostępny. Możesz grać, ale zaktualizuj jak najszybciej.', 'warning');
+                // Pokaż przycisk "później" nawet dla wymaganej aktualizacji
+                if (elements.btnUpdateLater) elements.btnUpdateLater.style.display = '';
+            }
         }
         showToast(`Błąd aktualizacji: ${data.error}`, 'error');
     });
@@ -1800,7 +2170,8 @@ async function handleDownloadUpdate() {
         await window.electronAPI?.downloadUpdate({
             downloadUrl: pendingUpdate.downloadUrl,
             sha256: pendingUpdate.sha256,
-            version: pendingUpdate.latestVersion
+            version: pendingUpdate.latestVersion,
+            nativeUpdate: !!pendingUpdate.nativeUpdate
         });
     } catch (error) {
         showToast('Błąd pobierania aktualizacji', 'error');
@@ -1815,9 +2186,159 @@ async function handleDownloadUpdate() {
 
 /**
  * Obsługuje instalację pobranej aktualizacji
+ * Dla electron-updater: bezszwowy restart (podmiana plików)
+ * Dla custom: uruchomienie instalatora
  */
 function handleInstallUpdate() {
-    window.electronAPI?.installUpdate();
+    window.electronAPI?.installUpdate({
+        nativeUpdate: !!pendingUpdate?.nativeUpdate
+    });
+}
+
+// ============================================
+// TRYB OFFLINE
+// ============================================
+
+/**
+ * Inicjalizuje obsługę trybu offline
+ */
+function initOfflineMode() {
+    // Nasłuchuj eventów zmiany statusu sieci z API client
+    window.addEventListener('online-status-changed', (event) => {
+        const { online, wasOffline } = event.detail;
+        state.isOffline = !online;
+
+        if (online && wasOffline) {
+            showToast('Połączenie przywrócone!', 'success');
+            removeOfflineIndicator();
+            // Odśwież dane po powrocie online
+            loadServerConfig();
+            loadNews();
+            loadAllServerStatuses();
+        } else if (!online) {
+            showToast('Brak połączenia z serwerem. Tryb offline.', 'warning');
+            showOfflineIndicator();
+        }
+
+        updateOfflineUI();
+    });
+
+    // Nasłuchuj natywnych eventów przeglądarki
+    window.addEventListener('online', () => {
+        if (state.isOffline) {
+            // Spróbuj ponownie połączyć się z API
+            loadServerConfig();
+        }
+    });
+
+    window.addEventListener('offline', () => {
+        if (!state.isOffline) {
+            state.isOffline = true;
+            window.isOffline = true;
+            showToast('Brak połączenia z internetem. Tryb offline.', 'warning');
+            showOfflineIndicator();
+            updateOfflineUI();
+        }
+    });
+}
+
+/**
+ * Wyświetla wskaźnik trybu offline w UI
+ */
+function showOfflineIndicator() {
+    // Dodaj wskaźnik offline do paska tytułowego jeśli nie istnieje
+    if (!document.getElementById('offline-indicator')) {
+        const indicator = document.createElement('div');
+        indicator.id = 'offline-indicator';
+        indicator.className = 'offline-indicator';
+        indicator.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <line x1="1" y1="1" x2="23" y2="23"/>
+                <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/>
+                <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/>
+                <path d="M10.71 5.05A16 16 0 0 1 22.56 9"/>
+                <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/>
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+                <line x1="12" y1="20" x2="12.01" y2="20"/>
+            </svg>
+            <span>Tryb offline</span>
+        `;
+        indicator.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 12px;background:rgba(239,68,68,0.2);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#ef4444;font-size:12px;font-weight:500;position:fixed;top:8px;right:140px;z-index:9999;-webkit-app-region:no-drag;';
+        const titlebar = document.getElementById('titlebar');
+        if (titlebar) {
+            titlebar.appendChild(indicator);
+        } else {
+            document.body.appendChild(indicator);
+        }
+    }
+}
+
+/**
+ * Usuwa wskaźnik trybu offline z UI
+ */
+function removeOfflineIndicator() {
+    const indicator = document.getElementById('offline-indicator');
+    if (indicator) {
+        indicator.remove();
+    }
+}
+
+/**
+ * Aktualizuje UI w zależności od statusu online/offline
+ */
+function updateOfflineUI() {
+    if (state.isOffline) {
+        // Wyłącz przyciski wymagające sieci
+        const linkRegister = document.getElementById('link-register');
+        if (linkRegister) {
+            linkRegister.style.pointerEvents = 'none';
+            linkRegister.style.opacity = '0.5';
+            linkRegister.title = 'Niedostępne w trybie offline';
+        }
+
+        // Aktualizuj przycisk graj - pozwól grać jeśli pliki są pobrane
+        if (state.isLoggedIn && state.config) {
+            elements.btnPlay.disabled = false;
+            elements.playSubtext.textContent = 'Tryb offline (pliki z cache)';
+        }
+    } else {
+        // Przywróć normalny stan
+        const linkRegister = document.getElementById('link-register');
+        if (linkRegister) {
+            linkRegister.style.pointerEvents = '';
+            linkRegister.style.opacity = '';
+            linkRegister.title = '';
+        }
+        updateUserUI();
+    }
+}
+
+// ============================================
+// CRASH REPORTS - SPRAWDZANIE PRZY STARCIE
+// ============================================
+
+/**
+ * Sprawdza czy są niedawne raporty o awariach i pokazuje powiadomienie
+ */
+async function checkRecentCrashReports() {
+    try {
+        const reports = await window.electronAPI?.crashReporter?.getReports();
+        if (reports && reports.length > 0) {
+            // Sprawdź czy najnowszy raport jest z ostatnich 24 godzin
+            const latestReport = reports[0];
+            if (latestReport.timestamp) {
+                const reportTime = new Date(latestReport.timestamp).getTime();
+                const now = Date.now();
+                const hoursSince = (now - reportTime) / (1000 * 60 * 60);
+
+                if (hoursSince < 24) {
+                    showToast('Wykryto raport z awarii. Sprawdz w ustawieniach.', 'warning');
+                }
+            }
+        }
+    } catch (error) {
+        console.warn('Blad sprawdzania raportow o awariach:', error);
+    }
 }
 
 // Odświeżaj konfigurację co 5 minut

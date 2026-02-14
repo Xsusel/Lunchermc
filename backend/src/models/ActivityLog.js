@@ -10,69 +10,8 @@
  */
 import db from '../config/database.js';
 
-// Migracja - dodaj nowe kolumny jeśli nie istnieją
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN category TEXT DEFAULT 'general';
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN severity TEXT DEFAULT 'info';
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN admin_id INTEGER;
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN resource_type TEXT;
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN resource_id TEXT;
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN old_value TEXT;
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN new_value TEXT;
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN user_agent TEXT;
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`
-        ALTER TABLE activity_logs ADD COLUMN session_id TEXT;
-    `);
-} catch (e) { /* Kolumna już istnieje */ }
-
-// Dodaj indeksy dla szybszego wyszukiwania
-db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_activity_logs_category ON activity_logs(category);
-    CREATE INDEX IF NOT EXISTS idx_activity_logs_severity ON activity_logs(severity);
-    CREATE INDEX IF NOT EXISTS idx_activity_logs_resource ON activity_logs(resource_type, resource_id);
-    CREATE INDEX IF NOT EXISTS idx_activity_logs_admin ON activity_logs(admin_id);
-    CREATE INDEX IF NOT EXISTS idx_activity_logs_created ON activity_logs(created_at);
-`);
+// NOTE: Column migrations and index creation have been moved to
+// /config/migrations.js (migrations 1 and 5). They run at startup.
 
 // Kategorie akcji
 const ActionCategories = {

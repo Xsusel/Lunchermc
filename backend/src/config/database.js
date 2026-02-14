@@ -20,9 +20,7 @@ if (!fs.existsSync(dbDir)) {
 }
 
 // Tworzymy połączenie z bazą danych
-const db = new Database(dbPath, {
-    verbose: process.env.NODE_ENV === 'development' ? console.log : null
-});
+const db = new Database(dbPath);
 
 // Włączamy obsługę kluczy obcych
 db.pragma('journal_mode = WAL');

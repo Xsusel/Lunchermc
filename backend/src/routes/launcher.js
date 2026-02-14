@@ -3,10 +3,12 @@
  * Endpointy używane przez klienta launchera
  */
 import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { GameConfig, Mod, Broadcast, LauncherVersion, ActivityLog, ServerRules, News, Server } from '../models/index.js';
 import { authenticateUser, optionalAuth } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { getClientIp } from '../utils/helpers.js';
+import { getClientIp, getUploadsPath } from '../utils/helpers.js';
 import { pingMinecraftServer, simplePing } from '../utils/mcPing.js';
 import db from '../config/database.js';
 
@@ -499,6 +501,101 @@ router.get('/news/:id', asyncHandler(async (req, res) => {
         success: true,
         data: news
     });
+}));
+
+// ============================================
+// ELECTRON-UPDATER: Auto-update endpoints
+// Serwuje latest.yml i pliki instalatora
+// electron-updater (generic provider) wymaga:
+//   GET /latest.yml -> metadane aktualizacji
+//   GET /<filename> -> plik instalatora
+// ============================================
+
+/**
+ * GET /api/launcher/releases/latest.yml
+ * Dynamicznie generuje latest.yml z najnowszej wersji w bazie
+ * Format kompatybilny z electron-updater generic provider
+ */
+router.get('/releases/latest.yml', asyncHandler(async (req, res) => {
+    const latest = LauncherVersion.getLatest();
+
+    if (!latest) {
+        return res.status(404).send('No versions available');
+    }
+
+    const sha512 = latest.sha512 || '';
+    const fileSize = latest.file_size || 0;
+    const filename = latest.filename || `XsusLauncher-${latest.version}-x64.exe`;
+    const releaseDate = latest.created_at || new Date().toISOString();
+
+    // Generuj YAML w formacie kompatybilnym z electron-updater (generic provider)
+    const lines = [
+        `version: ${latest.version}`,
+        `files:`,
+        `  - url: ${filename}`
+    ];
+    if (sha512) lines.push(`    sha512: ${sha512}`);
+    if (fileSize) lines.push(`    size: ${fileSize}`);
+    lines.push(`path: ${filename}`);
+    if (sha512) lines.push(`sha512: ${sha512}`);
+    lines.push(`releaseDate: '${releaseDate}'`);
+
+    const yaml = lines.join('\n') + '\n';
+
+    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(yaml);
+}));
+
+/**
+ * GET /api/launcher/releases/:filename
+ * Serwuje pliki instalatora dla electron-updater
+ * Przekierowuje do właściwego endpointu download
+ */
+router.get('/releases/:filename', asyncHandler(async (req, res) => {
+    const { filename } = req.params;
+
+    // Zabezpieczenie przed path traversal
+    const safeName = path.basename(filename);
+    if (safeName !== filename || filename.includes('..')) {
+        return res.status(400).json({ success: false, error: 'Nieprawidłowa nazwa pliku' });
+    }
+
+    const filePath = path.join(getUploadsPath(), 'launcher', safeName);
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+            success: false,
+            error: 'Plik nie istnieje'
+        });
+    }
+
+    const stat = fs.statSync(filePath);
+
+    // Obsługa Range requests (wznowienie pobierania)
+    const range = req.headers.range;
+    if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+
+        res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': end - start + 1,
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="${safeName}"`
+        });
+
+        fs.createReadStream(filePath, { start, end }).pipe(res);
+    } else {
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Length', stat.size);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+        res.setHeader('Accept-Ranges', 'bytes');
+
+        fs.createReadStream(filePath).pipe(res);
+    }
 }));
 
 export default router;

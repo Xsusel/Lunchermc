@@ -15,7 +15,11 @@ import {
     X,
     Gamepad2,
     Server,
-    Download
+    Download,
+    ScrollText,
+    Newspaper,
+    Shirt,
+    Box
 } from 'lucide-react';
 
 // Elementy nawigacji
@@ -23,8 +27,12 @@ const navItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/users', label: 'Użytkownicy', icon: Users },
     { path: '/mods', label: 'Mody', icon: Package },
+    { path: '/curseforge', label: 'CurseForge', icon: Box },
     { path: '/config', label: 'Konfiguracja', icon: Settings },
     { path: '/broadcasts', label: 'Powiadomienia', icon: Bell },
+    { path: '/rules', label: 'Regulamin', icon: ScrollText },
+    { path: '/news', label: 'Aktualnosci', icon: Newspaper },
+    { path: '/skins', label: 'Skiny', icon: Shirt },
     { path: '/logs', label: 'Logi', icon: FileText },
     { path: '/launcher-versions', label: 'Wersje Launchera', icon: Download },
     { path: '/system', label: 'System', icon: Server }

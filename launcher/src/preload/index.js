@@ -43,7 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ============================================
     checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
     downloadUpdate: (data) => ipcRenderer.invoke('download-update', data),
-    installUpdate: () => ipcRenderer.send('install-update'),
+    installUpdate: (data) => ipcRenderer.send('install-update', data),
     onUpdateAvailable: (callback) => {
         ipcRenderer.on('update-available', (event, data) => callback(data));
     },
@@ -94,7 +94,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Synchronizacja plikow
     syncMods: (mods) => ipcRenderer.invoke('sync-mods', mods),
     getFileHash: (filePath) => ipcRenderer.invoke('get-file-hash', filePath),
+    verifyFileHash: (filePath, expectedHash) => ipcRenderer.invoke('verify-file-hash', filePath, expectedHash),
     fileExists: (filePath) => ipcRenderer.invoke('file-exists', filePath),
+
+    // ============================================
+    // GAME LOGS
+    // ============================================
+    getLogSessions: () => ipcRenderer.invoke('get-log-sessions'),
+    readLogFile: (filePath) => ipcRenderer.invoke('read-log-file', filePath),
+    getCurrentLogs: () => ipcRenderer.invoke('get-current-logs'),
+    openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+    onGameLog: (callback) => {
+        ipcRenderer.on('game-log', (event, data) => callback(data));
+    },
 
     // Eventy gry
     onGameOutput: (callback) => {
@@ -112,10 +124,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onGameStatus: (callback) => {
         ipcRenderer.on('game-status', (event, data) => callback(data));
     },
+    onFileVerified: (callback) => {
+        ipcRenderer.on('file-verified', (event, data) => callback(data));
+    },
+    onFileVerifyError: (callback) => {
+        ipcRenderer.on('file-verify-error', (event, data) => callback(data));
+    },
 
     // Usuwanie listenerów
     removeAllListeners: (channel) => {
         ipcRenderer.removeAllListeners(channel);
+    },
+
+    // ============================================
+    // OFFLINE MODE
+    // ============================================
+    checkOnlineStatus: () => ipcRenderer.invoke('check-online-status'),
+    getCachedConfig: () => ipcRenderer.invoke('get-cached-config'),
+
+    // ============================================
+    // CRASH REPORTER (extended)
+    // ============================================
+    crashReporter: {
+        getReports: () => ipcRenderer.invoke('get-crash-reports'),
+        getReport: (filename) => ipcRenderer.invoke('get-crash-report', filename),
+        openFolder: () => ipcRenderer.invoke('open-crash-reports-folder')
     },
 
     // ============================================
@@ -125,6 +158,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getChangelogVersion: (version) => ipcRenderer.invoke('get-changelog-version', version),
     shouldShowChangelog: () => ipcRenderer.invoke('should-show-changelog'),
     markChangelogSeen: () => ipcRenderer.invoke('mark-changelog-seen'),
+
+    // ============================================
+    // API URL
+    // ============================================
+    getApiUrl: () => ipcRenderer.invoke('get-api-url'),
+    setApiUrl: (url) => ipcRenderer.invoke('set-api-url', url),
 
     // ============================================
     // MOTYWY

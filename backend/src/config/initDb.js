@@ -134,11 +134,33 @@ db.exec(`
         version TEXT UNIQUE NOT NULL,
         download_url TEXT NOT NULL,
         sha256 TEXT NOT NULL,
+        sha512 TEXT,
+        file_size INTEGER DEFAULT 0,
+        filename TEXT,
         changelog TEXT,
         is_required INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
 `);
+
+// Migracja: dodaj brakujące kolumny do launcher_versions (dla istniejących baz)
+try {
+    const cols = db.prepare("PRAGMA table_info(launcher_versions)").all().map(c => c.name);
+    if (!cols.includes('sha512')) {
+        db.exec("ALTER TABLE launcher_versions ADD COLUMN sha512 TEXT");
+        console.log('✅ Migracja: dodano kolumnę sha512 do launcher_versions');
+    }
+    if (!cols.includes('file_size')) {
+        db.exec("ALTER TABLE launcher_versions ADD COLUMN file_size INTEGER DEFAULT 0");
+        console.log('✅ Migracja: dodano kolumnę file_size do launcher_versions');
+    }
+    if (!cols.includes('filename')) {
+        db.exec("ALTER TABLE launcher_versions ADD COLUMN filename TEXT");
+        console.log('✅ Migracja: dodano kolumnę filename do launcher_versions');
+    }
+} catch (e) {
+    // Kolumny już istnieją lub tabela jest nowa
+}
 
 // Tabela serwerów (wiele serwerów do wyboru w launcherze)
 db.exec(`

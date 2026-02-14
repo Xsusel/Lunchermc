@@ -5,15 +5,67 @@
  */
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import multer from 'multer';
 import {
     User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion,
     PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules, News, Skin
 } from '../../models/index.js';
-import { authenticateAdmin } from '../../middleware/index.js';
+import BanAppeal from '../../models/BanAppeal.js';
+import { authenticateAdmin, requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
-import { getClientIp } from '../../utils/helpers.js';
+import { getClientIp, getUploadsPath, ensureDir, sanitizeFilename } from '../../utils/helpers.js';
+import { notifyBan } from '../../utils/discord.js';
+import wsManager from '../../utils/wsManager.js';
 
 const router = Router();
+
+// ============================================
+// MULTER CONFIG DLA UPLOADU LAUNCHERA
+// ============================================
+
+const LAUNCHER_EXTENSIONS = ['.exe', '.appimage', '.dmg', '.deb', '.zip', '.msi'];
+
+function getLauncherPath() {
+    const p = path.join(getUploadsPath(), 'launcher');
+    ensureDir(p);
+    return p;
+}
+
+const launcherStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, getLauncherPath());
+    },
+    filename: (req, file, cb) => {
+        const safeName = sanitizeFilename(file.originalname);
+        cb(null, safeName);
+    }
+});
+
+const launcherUpload = multer({
+    storage: launcherStorage,
+    limits: {
+        fileSize: 500 * 1024 * 1024 // 500MB max
+    },
+    fileFilter: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        if (LAUNCHER_EXTENSIONS.includes(ext)) {
+            cb(null, true);
+        } else {
+            cb(new Error(`Niedozwolone rozszerzenie pliku. Dozwolone: ${LAUNCHER_EXTENSIONS.join(', ')}`), false);
+        }
+    }
+});
+
+// Trasy 2FA, launcher-versions, maintenance wymagają roli admin
+router.use('/2fa', requireRole('admin'));
+router.use('/2fa/*', requireRole('admin'));
+router.use('/launcher-versions', requireRole('admin'));
+router.use('/launcher-versions/*', requireRole('admin'));
+router.use('/maintenance', requireRole('admin'));
+router.use('/maintenance/*', requireRole('admin'));
 
 // ============================================
 // INFORMACJE O ADMINIE
@@ -28,10 +80,87 @@ router.get('/me', asyncHandler(async (req, res) => {
         success: true,
         data: {
             id: req.admin.id,
-            username: req.admin.username
+            username: req.admin.username,
+            role: req.admin.role || 'admin'
         }
     });
 }));
+
+// ============================================
+// ZARZĄDZANIE ADMINAMI (ROLE)
+// ============================================
+
+/**
+ * POST /api/admin/admins/:id/role
+ * Zmienia rolę administratora (tylko dla adminów)
+ */
+router.post('/admins/:id/role',
+    requireRole('admin'),
+    [
+        param('id').isInt().withMessage('ID musi być liczbą'),
+        body('role').isIn(['admin', 'moderator']).withMessage('Rola musi być "admin" lub "moderator"')
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const targetId = parseInt(req.params.id);
+        const { role } = req.body;
+
+        // Nie pozwalamy zmienić roli samemu sobie
+        if (targetId === req.admin.id) {
+            return res.status(400).json({
+                success: false,
+                error: 'Nie możesz zmienić własnej roli'
+            });
+        }
+
+        const targetAdmin = Admin.findById(targetId);
+        if (!targetAdmin) {
+            return res.status(404).json({
+                success: false,
+                error: 'Administrator nie istnieje'
+            });
+        }
+
+        Admin.setRole(targetId, role);
+
+        ActivityLog.logAdminAction('admin_role_change', {
+            targetAdminId: targetId,
+            targetUsername: targetAdmin.username,
+            oldRole: targetAdmin.role || 'admin',
+            newRole: role
+        }, getClientIp(req));
+
+        res.json({
+            success: true,
+            message: `Rola użytkownika ${targetAdmin.username} została zmieniona na ${role}`,
+            data: { id: targetId, role }
+        });
+    })
+);
+
+/**
+ * GET /api/admin/admins
+ * Lista wszystkich administratorów (tylko dla adminów)
+ */
+router.get('/admins',
+    requireRole('admin'),
+    asyncHandler(async (req, res) => {
+        const admins = Admin.getAll();
+
+        res.json({
+            success: true,
+            data: admins
+        });
+    })
+);
 
 // ============================================
 // ZARZĄDZANIE 2FA
@@ -250,7 +379,7 @@ router.get('/launcher-versions', asyncHandler(async (req, res) => {
 
 /**
  * POST /api/admin/launcher-versions
- * Dodaje nową wersję launchera
+ * Dodaje nową wersję launchera (z URL ręcznie)
  */
 router.post('/launcher-versions',
     [
@@ -268,11 +397,28 @@ router.post('/launcher-versions',
             });
         }
 
+        // Sprawdź czy wersja już istnieje
+        if (LauncherVersion.findByVersion(req.body.version)) {
+            return res.status(409).json({
+                success: false,
+                error: `Wersja ${req.body.version} już istnieje`
+            });
+        }
+
         const version = LauncherVersion.create(req.body);
 
         ActivityLog.logAdminAction('launcher_version_add', {
-            version: version.version
+            version: version.version,
+            method: 'url'
         }, getClientIp(req));
+
+        // Powiadom połączone launchery o nowej wersji
+        wsManager.broadcast('launcher_update', {
+            version: version.version,
+            changelog: version.changelog,
+            isRequired: !!version.is_required,
+            downloadUrl: version.download_url
+        }, 'broadcast');
 
         res.status(201).json({
             success: true,
@@ -283,24 +429,147 @@ router.post('/launcher-versions',
 );
 
 /**
+ * POST /api/admin/launcher-versions/upload
+ * Przesyła plik launchera - automatycznie oblicza SHA256, tworzy URL i rekord w bazie
+ * Jeden klik: upload pliku → SHA256 → zapis → publikacja → powiadomienie WS
+ */
+router.post('/launcher-versions/upload',
+    (req, res, next) => {
+        launcherUpload.single('file')(req, res, (err) => {
+            if (err instanceof multer.MulterError) {
+                if (err.code === 'LIMIT_FILE_SIZE') {
+                    return res.status(413).json({
+                        success: false,
+                        error: 'Plik jest zbyt duży (max 500MB)'
+                    });
+                }
+                return res.status(400).json({
+                    success: false,
+                    error: `Błąd uploadu: ${err.message}`
+                });
+            }
+            if (err) {
+                return res.status(400).json({
+                    success: false,
+                    error: err.message
+                });
+            }
+            next();
+        });
+    },
+    asyncHandler(async (req, res) => {
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                error: 'Plik jest wymagany'
+            });
+        }
+
+        const version = req.body.version;
+        if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
+            // Usuń przesłany plik
+            fs.unlinkSync(req.file.path);
+            return res.status(400).json({
+                success: false,
+                error: 'Nieprawidłowy format wersji (wymagany: x.y.z)'
+            });
+        }
+
+        // Sprawdź czy wersja już istnieje
+        if (LauncherVersion.findByVersion(version)) {
+            fs.unlinkSync(req.file.path);
+            return res.status(409).json({
+                success: false,
+                error: `Wersja ${version} już istnieje`
+            });
+        }
+
+        // Oblicz SHA256 i SHA512 automatycznie
+        const fileBuffer = fs.readFileSync(req.file.path);
+        const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+        const sha512 = crypto.createHash('sha512').update(fileBuffer).digest('base64');
+
+        // URL do pobrania - musi pasować do endpointu /api/launcher/releases/:filename
+        const downloadUrl = `/api/launcher/releases/${req.file.filename}`;
+
+        // Zapisz w bazie
+        const versionRecord = LauncherVersion.create({
+            version,
+            download_url: downloadUrl,
+            sha256,
+            sha512,
+            file_size: req.file.size,
+            filename: req.file.filename,
+            changelog: req.body.changelog || null,
+            is_required: req.body.is_required === 'true' || req.body.is_required === true ? 1 : 0
+        });
+
+        ActivityLog.logAdminAction('launcher_version_upload', {
+            version: versionRecord.version,
+            filename: req.file.filename,
+            fileSize: req.file.size,
+            sha256,
+            method: 'upload'
+        }, getClientIp(req));
+
+        // Powiadom połączone launchery o nowej wersji przez WebSocket
+        wsManager.broadcast('launcher_update', {
+            version: versionRecord.version,
+            changelog: versionRecord.changelog,
+            isRequired: !!versionRecord.is_required,
+            downloadUrl: versionRecord.download_url
+        }, 'broadcast');
+
+        res.status(201).json({
+            success: true,
+            message: `Wersja ${version} została przesłana i opublikowana`,
+            data: {
+                ...versionRecord,
+                filename: req.file.filename,
+                fileSize: req.file.size,
+                sha256
+            }
+        });
+    })
+);
+
+/**
  * DELETE /api/admin/launcher-versions/:id
- * Usuwa wersję launchera
+ * Usuwa wersję launchera i powiązany plik z dysku
  */
 router.delete('/launcher-versions/:id', asyncHandler(async (req, res) => {
     const versionId = parseInt(req.params.id);
 
-    if (!LauncherVersion.findById(versionId)) {
+    const versionRecord = LauncherVersion.findById(versionId);
+    if (!versionRecord) {
         return res.status(404).json({
             success: false,
             error: 'Wersja nie istnieje'
         });
     }
 
+    // Usuń plik z dysku jeśli był uploadowany lokalnie
+    const localPrefixes = ['/api/launcher/releases/', '/api/download/launcher/'];
+    for (const prefix of localPrefixes) {
+        if (versionRecord.download_url && versionRecord.download_url.startsWith(prefix)) {
+            const filename = versionRecord.download_url.replace(prefix, '');
+            const filePath = path.join(getLauncherPath(), filename);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+            break;
+        }
+    }
+
     LauncherVersion.delete(versionId);
+
+    ActivityLog.logAdminAction('launcher_version_delete', {
+        version: versionRecord.version
+    }, getClientIp(req));
 
     res.json({
         success: true,
-        message: 'Wersja została usunięta'
+        message: `Wersja ${versionRecord.version} została usunięta`
     });
 }));
 
@@ -1111,6 +1380,12 @@ router.post('/bans/user',
         Session.revokeAllByUser(userId, 'user', 'user_banned');
 
         ActivityLog.logBan(userId, null, adminId, getClientIp(req), reason);
+
+        // Powiadomienie Discord (async, nie blokuje odpowiedzi)
+        const bannedUser = User.findById(userId);
+        if (bannedUser) {
+            notifyBan(bannedUser.username, reason).catch(() => {});
+        }
 
         res.json({
             success: true,
@@ -2210,6 +2485,84 @@ router.delete('/skins/:userId',
             success: true,
             message: `Skin użytkownika ${user.username} został usunięty`
         });
+    })
+);
+
+// ============================================
+// APELE OD BANOW (BanAppeal model - v2)
+// ============================================
+
+/**
+ * GET /api/admin/appeals
+ * Lista wszystkich apeli
+ */
+router.get('/appeals',
+    authenticateAdmin,
+    asyncHandler(async (req, res) => {
+        const options = {
+            limit: parseInt(req.query.limit) || 50,
+            offset: parseInt(req.query.offset) || 0,
+            status: req.query.status || null
+        };
+
+        const result = BanAppeal.getAll(options);
+
+        res.json({
+            success: true,
+            data: result.appeals,
+            total: result.total
+        });
+    })
+);
+
+/**
+ * PUT /api/admin/appeals/:id
+ * Aktualizuje status apelu (approved/rejected)
+ */
+router.put('/appeals/:id',
+    authenticateAdmin,
+    [
+        param('id').isInt().withMessage('ID musi być liczbą'),
+        body('status').isIn(['approved', 'rejected']).withMessage('Status musi być approved lub rejected'),
+        body('admin_response').optional().trim()
+    ],
+    asyncHandler(async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Błąd walidacji',
+                details: errors.array()
+            });
+        }
+
+        const id = parseInt(req.params.id);
+        const { status, admin_response } = req.body;
+
+        try {
+            const appeal = BanAppeal.updateStatus(id, status, admin_response || '');
+
+            ActivityLog.logAdminAction('ban_appeal_review', {
+                appealId: id,
+                status,
+                userId: appeal.user_id,
+                username: appeal.username,
+                adminResponse: admin_response
+            }, getClientIp(req));
+
+            res.json({
+                success: true,
+                message: status === 'approved'
+                    ? 'Apel zaakceptowany, użytkownik został odbanowany'
+                    : 'Apel odrzucony',
+                data: appeal
+            });
+        } catch (error) {
+            return res.status(400).json({
+                success: false,
+                error: error.message
+            });
+        }
     })
 );
 

@@ -5,10 +5,15 @@
 import { Router } from 'express';
 import { body, validationResult } from 'express-validator';
 import { GameConfig, ActivityLog } from '../../models/index.js';
+import { requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { getClientIp } from '../../utils/helpers.js';
 
 const router = Router();
+
+// Wszystkie trasy konfiguracji wymagają roli admin
+router.use('/config', requireRole('admin'));
+router.use('/config/*', requireRole('admin'));
 
 /**
  * GET /api/admin/config
@@ -31,9 +36,13 @@ router.put('/config',
     [
         body('game_version').optional().matches(/^\d+\.\d+(\.\d+)?$/),
         body('loader_type').optional().isIn(['vanilla', 'forge', 'fabric']),
-        body('server_ip').optional().isString(),
-        body('server_port').optional().isInt({ min: 1, max: 65535 }),
+        body('server_ip').optional().isString()
+            .matches(/^[a-zA-Z0-9._-]+$/).withMessage('Nieprawidłowy adres serwera'),
+        body('server_port').optional().isInt({ min: 1, max: 65535 })
+            .withMessage('Port musi być w zakresie 1-65535'),
         body('java_args').optional().isString()
+            .isLength({ max: 500 }).withMessage('Argumenty JVM max 500 znaków')
+            .matches(/^[a-zA-Z0-9\s_.=\-+:\/]*$/).withMessage('Niedozwolone znaki w argumentach JVM')
     ],
     asyncHandler(async (req, res) => {
         const errors = validationResult(req);

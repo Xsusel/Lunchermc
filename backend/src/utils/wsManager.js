@@ -7,6 +7,10 @@
  * - Różne typy powiadomień
  */
 import { WebSocketServer } from 'ws';
+import jwt from 'jsonwebtoken';
+import { createLogger } from './logger.js';
+
+const log = createLogger('WebSocket');
 
 class WebSocketManager {
     constructor() {
@@ -14,6 +18,11 @@ class WebSocketManager {
         this.clients = new Map(); // Map<ws, ClientInfo>
         this.heartbeatInterval = null;
         this.HEARTBEAT_INTERVAL_MS = 30000; // 30 sekund
+
+        // Rate limiting per client
+        this.RATE_LIMIT_WINDOW_MS = 10000; // 10 sekund
+        this.RATE_LIMIT_MAX_MESSAGES = 30; // max 30 wiadomości na okno
+        this.MAX_MESSAGE_SIZE = 4096; // max 4KB per message
 
         // Typy powiadomień
         this.NotificationTypes = {
@@ -25,6 +34,7 @@ class WebSocketManager {
             PLAYER_COUNT: 'player_count',
             MOD_UPDATE: 'mod_update',
             CONFIG_UPDATE: 'config_update',
+            LAUNCHER_UPDATE: 'launcher_update',
             ANNOUNCEMENT: 'announcement',
             ERROR: 'error'
         };
@@ -34,14 +44,36 @@ class WebSocketManager {
      * Inicjalizuje WebSocket Server
      */
     init(server, path = '/ws') {
-        this.wss = new WebSocketServer({ server, path });
+        this.wss = new WebSocketServer({
+            server,
+            path,
+            verifyClient: (info, callback) => {
+                // Weryfikacja JWT z query string: ws://host/ws?token=XXX
+                try {
+                    const url = new URL(info.req.url, 'http://localhost');
+                    const token = url.searchParams.get('token');
+
+                    if (token) {
+                        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                        // Zapisz decoded w req dla handleConnection
+                        info.req.jwtPayload = decoded;
+                    }
+                    // Pozwalamy też na połączenia bez tokenu (publiczne broadcasts)
+                    // ale oznaczamy je jako nieautoryzowane
+                    callback(true);
+                } catch (err) {
+                    log.warn('Odrzucono połączenie WS - nieprawidłowy token', { error: err.message });
+                    callback(false, 401, 'Unauthorized');
+                }
+            }
+        });
 
         this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
 
         // Uruchom heartbeat
         this.startHeartbeat();
 
-        console.log(`[WebSocket] Manager zainicjalizowany na ścieżce: ${path}`);
+        log.info('Manager zainicjalizowany', { path });
     }
 
     /**
@@ -52,6 +84,9 @@ class WebSocketManager {
         const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
                          req.socket?.remoteAddress || 'unknown';
 
+        // Odczytaj dane JWT z handshake (jeśli podano token)
+        const jwtPayload = req.jwtPayload || null;
+
         // Zapisz informacje o kliencie
         const clientInfo = {
             id: clientId,
@@ -59,14 +94,20 @@ class WebSocketManager {
             connectedAt: new Date(),
             lastPing: new Date(),
             subscriptions: new Set(['broadcast']), // Domyślnie subskrybuje broadcasts
-            userId: null,
-            username: null,
-            isAlive: true
+            userId: jwtPayload?.id || null,
+            username: jwtPayload?.username || null,
+            authenticated: !!jwtPayload,
+            tokenType: jwtPayload?.type || null,
+            isAlive: true,
+            // Rate limiting
+            messageCount: 0,
+            rateLimitWindowStart: Date.now(),
+            rateLimitWarnings: 0
         };
 
         this.clients.set(ws, clientInfo);
 
-        console.log(`[WebSocket] Nowe połączenie: ${clientId} z ${clientIp} (${this.clients.size} klientów)`);
+        log.info('Nowe połączenie', { clientId, clientIp, totalClients: this.clients.size });
 
         // Wyślij potwierdzenie
         this.send(ws, {
@@ -93,15 +134,61 @@ class WebSocketManager {
         // Obsługa zamknięcia
         ws.on('close', () => {
             const client = this.clients.get(ws);
-            console.log(`[WebSocket] Rozłączono: ${client?.id || 'unknown'}`);
+            log.info('Rozłączono', { clientId: client?.id || 'unknown' });
             this.clients.delete(ws);
         });
 
         // Obsługa błędów
         ws.on('error', (error) => {
-            console.error('[WebSocket] Błąd:', error);
+            log.error('Błąd połączenia', error);
             this.clients.delete(ws);
         });
+    }
+
+    /**
+     * Sprawdza rate limit per klient
+     * @returns {boolean} true jeśli wiadomość jest dozwolona
+     */
+    checkRateLimit(ws, client, dataSize) {
+        // Sprawdź rozmiar wiadomości
+        if (dataSize > this.MAX_MESSAGE_SIZE) {
+            this.send(ws, {
+                type: this.NotificationTypes.ERROR,
+                data: { message: 'Wiadomość zbyt duża' }
+            });
+            return false;
+        }
+
+        const now = Date.now();
+
+        // Resetuj okno jeśli minęło
+        if (now - client.rateLimitWindowStart > this.RATE_LIMIT_WINDOW_MS) {
+            client.messageCount = 0;
+            client.rateLimitWindowStart = now;
+        }
+
+        client.messageCount++;
+
+        // Sprawdź limit
+        if (client.messageCount > this.RATE_LIMIT_MAX_MESSAGES) {
+            client.rateLimitWarnings++;
+
+            // Po 3 ostrzeżeniach rozłączamy
+            if (client.rateLimitWarnings >= 3) {
+                log.warn('Klient rozłączony za rate limit', { clientId: client.id, ip: client.ip });
+                ws.close(1008, 'Rate limit exceeded');
+                this.clients.delete(ws);
+                return false;
+            }
+
+            this.send(ws, {
+                type: this.NotificationTypes.ERROR,
+                data: { message: 'Zbyt wiele wiadomości - zwolnij', warning: client.rateLimitWarnings }
+            });
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -109,10 +196,14 @@ class WebSocketManager {
      */
     handleMessage(ws, data) {
         try {
-            const message = JSON.parse(data.toString());
             const client = this.clients.get(ws);
-
             if (!client) return;
+
+            // Rate limiting
+            const dataStr = data.toString();
+            if (!this.checkRateLimit(ws, client, dataStr.length)) return;
+
+            const message = JSON.parse(dataStr);
 
             switch (message.type) {
                 case 'ping':
@@ -145,22 +236,32 @@ class WebSocketManager {
                     break;
 
                 case 'auth':
-                    // Autoryzacja (opcjonalna - dla identyfikacji użytkownika)
-                    if (message.userId && message.username) {
-                        client.userId = message.userId;
-                        client.username = message.username;
-                        this.send(ws, {
-                            type: 'authenticated',
-                            data: { userId: message.userId, username: message.username }
-                        });
+                    // Autoryzacja przez JWT token (bezpieczna identyfikacja)
+                    if (message.token) {
+                        try {
+                            const decoded = jwt.verify(message.token, process.env.JWT_SECRET);
+                            client.userId = decoded.id;
+                            client.username = decoded.username;
+                            client.authenticated = true;
+                            client.tokenType = decoded.type;
+                            this.send(ws, {
+                                type: 'authenticated',
+                                data: { userId: decoded.id, username: decoded.username }
+                            });
+                        } catch (err) {
+                            this.send(ws, {
+                                type: this.NotificationTypes.ERROR,
+                                data: { message: 'Nieprawidłowy token autoryzacji' }
+                            });
+                        }
                     }
                     break;
 
                 default:
-                    console.log(`[WebSocket] Nieznany typ wiadomości: ${message.type}`);
+                    log.debug('Nieznany typ wiadomości', { type: message.type });
             }
         } catch (error) {
-            console.error('[WebSocket] Błąd parsowania wiadomości:', error);
+            log.error('Błąd parsowania wiadomości', error);
         }
     }
 
@@ -196,7 +297,7 @@ class WebSocketManager {
             }
         });
 
-        console.log(`[WebSocket] Broadcast "${type}" na kanał "${channel}" - ${sent} klientów`);
+        log.debug('Broadcast wysłany', { type, channel, clientsNotified: sent });
         return sent;
     }
 
@@ -245,6 +346,17 @@ class WebSocketManager {
     }
 
     /**
+     * Wysyła powiadomienie o nowej wersji launchera
+     */
+    notifyLauncherUpdate(version, changelog, isRequired, downloadUrl) {
+        return this.broadcast(
+            this.NotificationTypes.LAUNCHER_UPDATE,
+            { version, changelog, isRequired, downloadUrl },
+            'broadcast'
+        );
+    }
+
+    /**
      * Wysyła announcement/broadcast
      */
     sendAnnouncement(title, message, type = 'info') {
@@ -266,7 +378,7 @@ class WebSocketManager {
         this.heartbeatInterval = setInterval(() => {
             this.clients.forEach((clientInfo, ws) => {
                 if (!clientInfo.isAlive) {
-                    console.log(`[WebSocket] Usuwanie nieaktywnego klienta: ${clientInfo.id}`);
+                    log.info('Usuwanie nieaktywnego klienta', { clientId: clientInfo.id });
                     ws.terminate();
                     this.clients.delete(ws);
                     return;
@@ -277,7 +389,7 @@ class WebSocketManager {
             });
         }, this.HEARTBEAT_INTERVAL_MS);
 
-        console.log('[WebSocket] Heartbeat uruchomiony');
+        log.info('Heartbeat uruchomiony');
     }
 
     /**
@@ -348,7 +460,7 @@ class WebSocketManager {
             ws.close(1000, 'Serwer jest zamykany');
         });
         this.clients.clear();
-        console.log('[WebSocket] Wszystkie połączenia zamknięte');
+        log.info('Wszystkie połączenia zamknięte');
     }
 }
 

@@ -1,25 +1,65 @@
 /**
  * XsusLauncher - Klient API
  * Komunikacja z backendem serwera
+ * Z obsługą trybu offline
  */
 
-// URL API - ustaw odpowiedni adres serwera
-const API_URL = 'https://mc.xsus.pl/api';
+// URL API - domyślny, nadpisywany z electron-store / env
+const DEFAULT_API_URL = 'https://mc.xsus.pl/api';
+
+// Globalny stan offline
+window.isOffline = false;
 
 /**
  * Klasa obsługująca komunikację z API
- * Z optymalizacjami: cache, ETag support
+ * Z optymalizacjami: cache, ETag support, offline fallback
  */
 class ApiClient {
     constructor() {
-        this.baseUrl = API_URL;
+        this.baseUrl = DEFAULT_API_URL;
         this.token = null;
+        this._apiUrlLoaded = false;
 
         // Cache responses (optymalizacja dla słabszych PC)
         this.cache = new Map();
         this.cacheExpiry = new Map();
         this.defaultCacheTTL = 30 * 1000; // 30 sekund domyślnie
         this.configCacheTTL = 5 * 60 * 1000; // 5 minut dla konfiguracji
+
+        // localStorage keys for offline cache
+        this._offlineCachePrefix = 'xsus_offline_';
+    }
+
+    /**
+     * Ładuje URL API z main process (electron-store / env / default)
+     * Wywoływane raz przy pierwszym request
+     */
+    async loadApiUrl() {
+        if (this._apiUrlLoaded) return;
+        try {
+            const apiUrl = await window.electronAPI?.getApiUrl();
+            if (apiUrl) {
+                const cleanUrl = apiUrl.replace(/\/+$/, '');
+                // Unikaj podwójnego /api/api - sprawdź czy URL już kończy się na /api
+                this.baseUrl = cleanUrl.endsWith('/api') ? cleanUrl : cleanUrl + '/api';
+            }
+        } catch (e) {
+            console.warn('[API] Failed to load API URL from main process:', e);
+        }
+        this._apiUrlLoaded = true;
+    }
+
+    /**
+     * Aktualizuje bazowy URL API (po zmianie w ustawieniach)
+     */
+    updateBaseUrl(apiUrl) {
+        if (apiUrl) {
+            const cleanUrl = apiUrl.replace(/\/+$/, '');
+            this.baseUrl = cleanUrl.endsWith('/api') ? cleanUrl : cleanUrl + '/api';
+            this._apiUrlLoaded = true;
+            // Wyczyść cache po zmianie URL
+            this.clearCache();
+        }
     }
 
     /**
@@ -66,11 +106,54 @@ class ApiClient {
     }
 
     /**
-     * Wykonuje żądanie HTTP z opcjonalnym cache
+     * Sprawdza czy launcher jest online
+     * @returns {boolean}
+     */
+    static isOnline() {
+        return !window.isOffline;
+    }
+
+    /**
+     * Zapisuje odpowiedź do localStorage jako offline cache
+     */
+    _saveToOfflineCache(key, data) {
+        try {
+            const cacheEntry = {
+                data: data,
+                timestamp: Date.now()
+            };
+            localStorage.setItem(this._offlineCachePrefix + key, JSON.stringify(cacheEntry));
+        } catch (e) {
+            console.warn('[Offline Cache] Failed to save:', e.message);
+        }
+    }
+
+    /**
+     * Pobiera dane z offline cache w localStorage
+     */
+    _getFromOfflineCache(key) {
+        try {
+            const raw = localStorage.getItem(this._offlineCachePrefix + key);
+            if (raw) {
+                const cacheEntry = JSON.parse(raw);
+                return cacheEntry.data;
+            }
+        } catch (e) {
+            console.warn('[Offline Cache] Failed to read:', e.message);
+        }
+        return null;
+    }
+
+    /**
+     * Wykonuje żądanie HTTP z opcjonalnym cache i offline fallback
      */
     async request(endpoint, options = {}, cacheOptions = {}) {
+        // Upewnij się, że URL API jest załadowany
+        await this.loadApiUrl();
+
         const { useCache = false, cacheTTL = this.defaultCacheTTL, forceRefresh = false } = cacheOptions;
         const cacheKey = `${endpoint}:${JSON.stringify(options.body || '')}`;
+        const offlineCacheKey = endpoint.replace(/[^a-zA-Z0-9]/g, '_');
 
         // Sprawdź cache (tylko dla GET requests)
         if (useCache && !forceRefresh && options.method !== 'POST') {
@@ -109,9 +192,44 @@ class ApiClient {
                 this.setCache(cacheKey, data, cacheTTL);
             }
 
+            // Zapisz do offline cache (localStorage) dla kluczowych endpointów GET
+            if (options.method !== 'POST' && options.method !== 'DELETE') {
+                this._saveToOfflineCache(offlineCacheKey, data);
+            }
+
+            // Jeśli byliśmy offline a teraz się udało - przywróć online
+            if (window.isOffline) {
+                const wasOffline = true;
+                window.isOffline = false;
+                console.log('[API] Connection restored - switching to online mode');
+                // Emituj event przejścia do trybu online
+                window.dispatchEvent(new CustomEvent('online-status-changed', { detail: { online: true, wasOffline } }));
+            }
+
             return data;
         } catch (error) {
-            if (error.message === 'Failed to fetch') {
+            const isNetworkError = error.message === 'Failed to fetch' ||
+                error.message === 'NetworkError when attempting to fetch resource.' ||
+                error.message === 'Network request failed' ||
+                error.name === 'TypeError';
+
+            if (isNetworkError) {
+                // Ustaw tryb offline
+                if (!window.isOffline) {
+                    window.isOffline = true;
+                    console.warn('[API] Network error - switching to offline mode');
+                    window.dispatchEvent(new CustomEvent('online-status-changed', { detail: { online: false } }));
+                }
+
+                // Spróbuj pobrać z offline cache (tylko dla GET requests)
+                if (options.method !== 'POST' && options.method !== 'DELETE') {
+                    const offlineData = this._getFromOfflineCache(offlineCacheKey);
+                    if (offlineData) {
+                        console.log(`[API Offline Cache HIT] ${endpoint}`);
+                        return offlineData;
+                    }
+                }
+
                 throw new Error('Brak połączenia z serwerem');
             }
             throw error;
@@ -295,3 +413,8 @@ class ApiClient {
 
 // Eksportujemy instancję
 const api = new ApiClient();
+
+// Alias dla wygody - LauncherAPI.isOnline()
+const LauncherAPI = {
+    isOnline: () => ApiClient.isOnline()
+};

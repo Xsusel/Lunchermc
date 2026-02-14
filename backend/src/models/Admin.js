@@ -6,18 +6,8 @@ import db from '../config/database.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
-// Migracja - dodaj kolumny 2FA jeśli nie istnieją
-try {
-    db.exec(`ALTER TABLE admins ADD COLUMN totp_secret TEXT;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`ALTER TABLE admins ADD COLUMN totp_enabled INTEGER DEFAULT 0;`);
-} catch (e) { /* Kolumna już istnieje */ }
-
-try {
-    db.exec(`ALTER TABLE admins ADD COLUMN totp_backup_codes TEXT;`);
-} catch (e) { /* Kolumna już istnieje */ }
+// NOTE: Column migrations (2FA, role) have been moved to
+// /config/migrations.js (migrations 2 and 3). They run at startup.
 
 // ============================================
 // TOTP (RFC 6238) - Pure JavaScript Implementation
@@ -155,7 +145,7 @@ class Admin {
      */
     static findById(id) {
         return db.prepare(`
-            SELECT id, username, created_at, last_login
+            SELECT id, username, role, created_at, last_login
             FROM admins WHERE id = ?
         `).get(id);
     }
@@ -214,7 +204,7 @@ class Admin {
      */
     static getAll() {
         return db.prepare(`
-            SELECT id, username, created_at, last_login
+            SELECT id, username, role, created_at, last_login
             FROM admins ORDER BY created_at ASC
         `).all();
     }
@@ -232,6 +222,32 @@ class Admin {
         }
 
         const result = db.prepare('DELETE FROM admins WHERE id = ?').run(id);
+        return result.changes > 0;
+    }
+
+    /**
+     * Pobiera rolę administratora
+     * @param {number} id - ID administratora
+     * @returns {string|null} Rola ('admin' lub 'moderator') lub null
+     */
+    static getRole(id) {
+        const admin = db.prepare('SELECT role FROM admins WHERE id = ?').get(id);
+        return admin ? (admin.role || 'admin') : null;
+    }
+
+    /**
+     * Ustawia rolę administratora
+     * @param {number} id - ID administratora
+     * @param {string} role - Nowa rola ('admin' lub 'moderator')
+     * @returns {boolean} Czy operacja się powiodła
+     */
+    static setRole(id, role) {
+        if (!['admin', 'moderator'].includes(role)) {
+            throw new Error('Nieprawidłowa rola. Dozwolone: admin, moderator');
+        }
+        const result = db.prepare(`
+            UPDATE admins SET role = ? WHERE id = ?
+        `).run(role, id);
         return result.changes > 0;
     }
 

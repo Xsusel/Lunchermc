@@ -1,15 +1,17 @@
 /**
  * Strona Dashboard - przeglad systemu
+ * Z informacjami o dysku, pamieci, ostatniej aktywnosci i statystykach
  */
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { dashboardApi } from '../api/client';
+import { dashboardApi, healthApi, logsApi } from '../api/client';
 import { useDataStore } from '../hooks/useStore';
 import {
     Users, Package, Bell, Activity, Server,
     TrendingUp, Clock, Gamepad2, AlertTriangle,
-    Wifi, WifiOff, RefreshCw
+    Wifi, WifiOff, RefreshCw, HardDrive, Cpu,
+    UserPlus, LogIn, FileText
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { pl } from 'date-fns/locale';
@@ -20,10 +22,14 @@ function DashboardPage() {
     const [serverStatus, setServerStatus] = useState(null);
     const [serversStatus, setServersStatus] = useState(null);
     const [serverLoading, setServerLoading] = useState(true);
+    const [systemHealth, setSystemHealth] = useState(null);
+    const [recentLogs, setRecentLogs] = useState([]);
 
     useEffect(() => {
         loadStats();
         loadAllServersStatus();
+        loadSystemHealth();
+        loadRecentLogs();
 
         // Odswiez status serwerow co 30 sekund
         const interval = setInterval(loadAllServersStatus, 30000);
@@ -43,13 +49,36 @@ function DashboardPage() {
         }
     };
 
+    const loadSystemHealth = async () => {
+        try {
+            const response = await healthApi.getDetailed();
+            if (response.success) {
+                setSystemHealth(response.data);
+            }
+        } catch (error) {
+            // Endpoint moze nie istniec - ignoruj cicho
+            console.warn('Nie udalo sie pobrac statusu systemu:', error.message);
+        }
+    };
+
+    const loadRecentLogs = async () => {
+        try {
+            const response = await logsApi.getAll(5, 0, null);
+            if (response.success) {
+                setRecentLogs(response.data);
+            }
+        } catch (error) {
+            // Ignoruj - logi zaladowane w stats
+        }
+    };
+
     const loadAllServersStatus = async () => {
         try {
             setServerLoading(true);
             const response = await dashboardApi.getAllServersStatus();
             if (response.success) {
                 setServersStatus(response.data);
-                // Kompatybilność wsteczna - ustaw domyślny serwer jako serverStatus
+                // Kompatybilnosc wsteczna - ustaw domyslny serwer jako serverStatus
                 const defaultServer = response.data.servers?.find(s => s.isDefault) || response.data.servers?.[0];
                 if (defaultServer) {
                     setServerStatus(defaultServer);
@@ -78,6 +107,9 @@ function DashboardPage() {
         );
     }
 
+    // Oblicz dzisiejsze statystyki z recentActivity
+    const todayStats = computeTodayStats(stats?.recentActivity || recentLogs);
+
     return (
         <div className="space-y-6 animate-fadeIn">
             {/* Naglowek */}
@@ -97,12 +129,12 @@ function DashboardPage() {
                 </div>
             )}
 
-            {/* Status serwerów MC */}
+            {/* Status serwerow MC */}
             <div className="card">
                 <div className="flex items-center justify-between mb-4">
                     <div className="card-header mb-0">
                         <Server className="w-5 h-5 text-mc-green" />
-                        Status Serwerów Minecraft
+                        Status Serwerow Minecraft
                         {serversStatus?.summary && (
                             <span className="text-sm font-normal text-gray-400 ml-2">
                                 ({serversStatus.summary.onlineServers}/{serversStatus.summary.totalServers} online, {serversStatus.summary.totalPlayersOnline} graczy)
@@ -135,7 +167,7 @@ function DashboardPage() {
                                     <div className="flex items-center gap-2">
                                         <p className="font-medium text-white">{srv.name}</p>
                                         {srv.isDefault && (
-                                            <span className="px-1.5 py-0.5 text-xs bg-mc-accent/20 text-mc-accent rounded">Domyślny</span>
+                                            <span className="px-1.5 py-0.5 text-xs bg-mc-accent/20 text-mc-accent rounded">Domyslny</span>
                                         )}
                                         <span className={`text-xs ${srv.online ? 'text-green-400' : 'text-red-400'}`}>
                                             {srv.online ? 'ONLINE' : 'OFFLINE'}
@@ -148,8 +180,8 @@ function DashboardPage() {
                                         {srv.players?.online || 0}<span className="text-gray-500 text-sm">/{srv.players?.max || 0}</span>
                                     </p>
                                     <p className="text-xs text-gray-500">
-                                        {srv.latency ? `${srv.latency}ms` : '—'}
-                                        {srv.version && ` · ${srv.version}`}
+                                        {srv.latency ? `${srv.latency}ms` : '\u2014'}
+                                        {srv.version && ` \u00B7 ${srv.version}`}
                                     </p>
                                 </div>
                                 {srv.players?.sample?.length > 0 && (
@@ -205,11 +237,11 @@ function DashboardPage() {
                         </div>
                     </div>
                 ) : (
-                    <p className="text-gray-500 text-center py-4">Brak skonfigurowanych serwerów</p>
+                    <p className="text-gray-500 text-center py-4">Brak skonfigurowanych serwerow</p>
                 )}
             </div>
 
-            {/* Statystyki */}
+            {/* Glowne statystyki */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {/* Uzytkownicy */}
                 <div className="stat-card">
@@ -262,18 +294,89 @@ function DashboardPage() {
                 </div>
             </div>
 
+            {/* Statystyki dzisiejsze */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="card flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-lg bg-green-900/30 flex items-center justify-center flex-shrink-0">
+                        <LogIn className="w-5 h-5 text-green-400" />
+                    </div>
+                    <div>
+                        <p className="text-xl font-bold text-white">{todayStats.logins}</p>
+                        <p className="text-xs text-gray-500">Logowan dzis</p>
+                    </div>
+                </div>
+                <div className="card flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-lg bg-blue-900/30 flex items-center justify-center flex-shrink-0">
+                        <UserPlus className="w-5 h-5 text-blue-400" />
+                    </div>
+                    <div>
+                        <p className="text-xl font-bold text-white">{todayStats.registrations}</p>
+                        <p className="text-xs text-gray-500">Rejestracji dzis</p>
+                    </div>
+                </div>
+                <div className="card flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-lg bg-purple-900/30 flex items-center justify-center flex-shrink-0">
+                        <Gamepad2 className="w-5 h-5 text-purple-400" />
+                    </div>
+                    <div>
+                        <p className="text-xl font-bold text-white">{todayStats.gameStarts}</p>
+                        <p className="text-xs text-gray-500">Uruchomien gry dzis</p>
+                    </div>
+                </div>
+                <div className="card flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-lg bg-yellow-900/30 flex items-center justify-center flex-shrink-0">
+                        <Activity className="w-5 h-5 text-yellow-400" />
+                    </div>
+                    <div>
+                        <p className="text-xl font-bold text-white">{todayStats.total}</p>
+                        <p className="text-xs text-gray-500">Wszystkich zdarzen dzis</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Uzycie zasobow systemowych */}
+            {systemHealth && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Dysk */}
+                    <div className="card">
+                        <div className="card-header">
+                            <HardDrive className="w-5 h-5 text-mc-green" />
+                            Uzycie dysku
+                        </div>
+                        <UsageBar
+                            used={systemHealth.disk?.used || systemHealth.diskUsed || 0}
+                            total={systemHealth.disk?.total || systemHealth.diskTotal || 0}
+                            label="Dysk"
+                        />
+                    </div>
+
+                    {/* Pamiec */}
+                    <div className="card">
+                        <div className="card-header">
+                            <Cpu className="w-5 h-5 text-mc-green" />
+                            Uzycie pamieci RAM
+                        </div>
+                        <UsageBar
+                            used={systemHealth.memory?.used || systemHealth.memUsed || 0}
+                            total={systemHealth.memory?.total || systemHealth.memTotal || 0}
+                            label="RAM"
+                        />
+                    </div>
+                </div>
+            )}
+
             {/* Sekcja dolna */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Ostatnia aktywnosc */}
+                {/* Ostatnia aktywnosc (preview) */}
                 <div className="card">
                     <div className="card-header">
                         <Activity className="w-5 h-5 text-mc-green" />
                         Ostatnia aktywnosc
                     </div>
 
-                    {stats?.recentActivity?.length > 0 ? (
+                    {(stats?.recentActivity?.length > 0 || recentLogs.length > 0) ? (
                         <div className="space-y-3">
-                            {stats.recentActivity.slice(0, 5).map((log, index) => (
+                            {(stats?.recentActivity || recentLogs).slice(0, 5).map((log, index) => (
                                 <div
                                     key={log.id || index}
                                     className="flex items-center justify-between py-2 border-b border-mc-gray last:border-0"
@@ -283,6 +386,7 @@ function DashboardPage() {
                                             log.action.includes('login') ? 'bg-green-500' :
                                             log.action.includes('register') ? 'bg-blue-500' :
                                             log.action.includes('game') ? 'bg-purple-500' :
+                                            log.action.includes('ban') || log.action.includes('delete') ? 'bg-red-500' :
                                             'bg-gray-500'
                                         }`} />
                                         <div>
@@ -375,6 +479,73 @@ function DashboardPage() {
             </div>
         </div>
     );
+}
+
+/**
+ * Komponent paska uzycia zasobow (dysk/RAM)
+ */
+function UsageBar({ used, total, label }) {
+    const percentage = total > 0 ? Math.round((used / total) * 100) : 0;
+
+    const getColor = (pct) => {
+        if (pct >= 90) return 'bg-red-500';
+        if (pct >= 70) return 'bg-yellow-500';
+        return 'bg-green-500';
+    };
+
+    const getTextColor = (pct) => {
+        if (pct >= 90) return 'text-red-400';
+        if (pct >= 70) return 'text-yellow-400';
+        return 'text-green-400';
+    };
+
+    return (
+        <div>
+            <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-400">
+                    {formatBytes(used)} / {formatBytes(total)}
+                </span>
+                <span className={`text-sm font-medium ${getTextColor(percentage)}`}>
+                    {percentage}%
+                </span>
+            </div>
+            <div className="w-full h-3 bg-mc-darker rounded-full overflow-hidden border border-mc-gray">
+                <div
+                    className={`h-full rounded-full transition-all duration-500 ${getColor(percentage)}`}
+                    style={{ width: `${Math.min(percentage, 100)}%` }}
+                />
+            </div>
+            {percentage >= 90 && (
+                <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" />
+                    {label} prawie pelny!
+                </p>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Oblicza dzisiejsze statystyki z listy logow
+ */
+function computeTodayStats(logs) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const todayLogs = (logs || []).filter(log => {
+        try {
+            return new Date(log.created_at) >= today;
+        } catch {
+            return false;
+        }
+    });
+
+    return {
+        logins: todayLogs.filter(l => l.action === 'login').length,
+        registrations: todayLogs.filter(l => l.action === 'registration').length,
+        gameStarts: todayLogs.filter(l => l.action === 'game_start').length,
+        total: todayLogs.length
+    };
 }
 
 // Funkcje pomocnicze

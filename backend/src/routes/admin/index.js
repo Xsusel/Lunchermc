@@ -13,6 +13,8 @@ import serversRouter from './servers.js';
 import logsRouter from './logs.js';
 import backupsRouter from './backups.js';
 import miscRouter from './misc.js';
+import statsRouter from './stats.js';
+import curseforgeRoutes from './curseforge.js';
 
 const router = Router();
 
@@ -32,5 +34,7 @@ router.use('/', broadcastsRouter);
 router.use('/', serversRouter);
 router.use('/', logsRouter);
 router.use('/', backupsRouter);
+router.use('/', statsRouter);  // /stats/players, /stats/players/:id, /stats/overview
+router.use('/curseforge', curseforgeRoutes);
 
 export default router;
