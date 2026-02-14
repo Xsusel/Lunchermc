@@ -130,7 +130,9 @@ export const formatFileSize = (bytes) => {
  */
 export const sanitizeFilename = (filename) => {
     return filename
-        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        // Usuń tylko naprawdę niebezpieczne znaki (path traversal, null bytes, kontrolne)
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+        .replace(/\.\./g, '_')
         .replace(/_{2,}/g, '_')
         .slice(0, 255);
 };
