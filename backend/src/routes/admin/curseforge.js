@@ -9,7 +9,7 @@ import { Mod, ActivityLog, Server } from '../../models/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import {
     calculateSHA256, sanitizeFilename,
-    getModsPath, getServerSubPath, ensureDir, getClientIp,
+    getModsPath, getServerSubPath, ensureDir, getClientIp, createServerFolders,
 } from '../../utils/helpers.js';
 import {
     searchMods as cfSearchMods,
@@ -328,6 +328,8 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
             neoforge_version: loaderType === 'neoforge' ? loaderVersion : null,
             java_args: javaArgs,
         });
+        // Create full folder structure for the new server
+        createServerFolders(targetServer.id);
     } else if (serverId) {
         targetServer = Server.getById(parseInt(serverId));
         if (!targetServer) {
@@ -336,6 +338,8 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
                 error: 'Serwer nie znaleziony',
             });
         }
+        // Ensure folder structure exists for existing server
+        createServerFolders(targetServer.id);
         // Update server config to match modpack
         Server.update(targetServer.id, {
             game_version: mcVersion,

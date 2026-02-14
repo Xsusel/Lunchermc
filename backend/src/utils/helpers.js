@@ -204,6 +204,23 @@ export const getServerSubPath = (serverId, subdir) => {
 };
 
 /**
+ * Standardowe foldery tworzone dla każdego serwera
+ */
+export const SERVER_FOLDERS = ['mods', 'config', 'resourcepacks', 'shaderpacks', 'scripts', 'kubejs'];
+
+/**
+ * Tworzy pełną strukturę folderów dla serwera
+ * @param {number} serverId - ID serwera
+ */
+export const createServerFolders = (serverId) => {
+    const basePath = getServerPath(serverId);
+    ensureDir(basePath);
+    for (const folder of SERVER_FOLDERS) {
+        ensureDir(path.join(basePath, folder));
+    }
+};
+
+/**
  * Opóźnienie wykonania
  * @param {number} ms - Milisekundy
  * @returns {Promise<void>}
