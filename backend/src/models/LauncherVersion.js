@@ -63,9 +63,11 @@ class LauncherVersion {
     /**
      * Pobiera informacje o aktualizacji dla launchera
      * @param {string} currentVersion - Aktualna wersja klienta
+     * @param {string} arch - Architektura (x64, ia32)
+     * @param {string} platform - Platforma (win32, linux, darwin)
      * @returns {object} Informacje o aktualizacji
      */
-    static checkForUpdate(currentVersion) {
+    static checkForUpdate(currentVersion, arch = 'x64', platform = 'win32') {
         const latest = this.getLatest();
 
         if (!latest) {
@@ -79,14 +81,31 @@ class LauncherVersion {
         // Porównujemy wersje (zakładamy format semver: x.y.z)
         const isNewer = this.compareVersions(latest.version, currentVersion) > 0;
 
+        // Dostosuj URL pobierania do architektury i platformy
+        let downloadUrl = latest.download_url;
+        if (isNewer && downloadUrl) {
+            // Jeśli URL zawiera placeholder ${arch}, podmień go
+            downloadUrl = downloadUrl.replace('${arch}', arch);
+            // Jeśli URL nie zawiera architektury, spróbuj dodać ją do nazwy pliku
+            if (!downloadUrl.includes(arch) && !downloadUrl.includes('${arch}')) {
+                // Podmień np. XsusLauncher-1.0.0.exe na XsusLauncher-1.0.0-x64.exe
+                downloadUrl = downloadUrl.replace(
+                    /(\.[^.]+)$/,
+                    `-${arch}$1`
+                );
+            }
+        }
+
         return {
             updateAvailable: isNewer,
             currentVersion,
             latestVersion: latest.version,
-            downloadUrl: isNewer ? latest.download_url : null,
+            downloadUrl: isNewer ? downloadUrl : null,
             sha256: isNewer ? latest.sha256 : null,
             changelog: isNewer ? latest.changelog : null,
-            isRequired: isNewer ? !!latest.is_required : false
+            isRequired: isNewer ? !!latest.is_required : false,
+            arch,
+            platform
         };
     }
 

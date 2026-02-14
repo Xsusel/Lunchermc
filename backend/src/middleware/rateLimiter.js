@@ -431,11 +431,11 @@ export const registerLimiter = rateLimit({
 
 /**
  * Limiter dla pobierania plików
- * 50 pobrań na minutę
+ * 5000 pobrań na minutę (launcher pobiera wiele modów naraz)
  */
 export const downloadLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minuta
-    max: 50,
+    max: 5000,
     message: {
         success: false,
         error: 'Zbyt wiele żądań pobierania. Poczekaj chwilę.',

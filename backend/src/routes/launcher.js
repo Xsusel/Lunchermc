@@ -190,10 +190,13 @@ router.get('/broadcasts', asyncHandler(async (req, res) => {
 /**
  * GET /api/launcher/check-update
  * Sprawdza dostępność aktualizacji launchera
+ * Query params: version, arch (x64/ia32), platform (win32/linux/darwin)
  */
 router.get('/check-update', asyncHandler(async (req, res) => {
     const currentVersion = req.query.version || '0.0.0';
-    const updateInfo = LauncherVersion.checkForUpdate(currentVersion);
+    const arch = req.query.arch || 'x64';
+    const platform = req.query.platform || 'win32';
+    const updateInfo = LauncherVersion.checkForUpdate(currentVersion, arch, platform);
 
     res.json({
         success: true,
