@@ -315,10 +315,17 @@ async function checkForUpdates() {
 
         if (response && response.success && response.data && response.data.updateAvailable) {
             console.log(`Update available: ${response.data.latestVersion}`);
+
+            // Resolve relative download URL to absolute
+            let downloadUrl = response.data.downloadUrl;
+            if (downloadUrl && !downloadUrl.startsWith('http')) {
+                downloadUrl = `${apiUrl}${downloadUrl.startsWith('/') ? '' : '/'}${downloadUrl}`;
+            }
+
             mainWindow?.webContents.send('update-available', {
                 currentVersion: response.data.currentVersion,
                 latestVersion: response.data.latestVersion,
-                downloadUrl: response.data.downloadUrl,
+                downloadUrl,
                 sha256: response.data.sha256,
                 changelog: response.data.changelog,
                 isRequired: response.data.isRequired

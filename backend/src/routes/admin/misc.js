@@ -5,6 +5,10 @@
  */
 import { Router } from 'express';
 import { body, param, validationResult } from 'express-validator';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import multer from 'multer';
 import {
     User, Admin, GameConfig, Mod, Broadcast, ActivityLog, LauncherVersion,
     PlayerStats, ScheduledMaintenance, Session, Ban, ServerRules, News, Skin
@@ -12,10 +16,48 @@ import {
 import BanAppeal from '../../models/BanAppeal.js';
 import { authenticateAdmin, requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
-import { getClientIp } from '../../utils/helpers.js';
+import { getClientIp, getUploadsPath, ensureDir, sanitizeFilename } from '../../utils/helpers.js';
 import { notifyBan } from '../../utils/discord.js';
+import wsManager from '../../utils/wsManager.js';
 
 const router = Router();
+
+// ============================================
+// MULTER CONFIG DLA UPLOADU LAUNCHERA
+// ============================================
+
+const LAUNCHER_EXTENSIONS = ['.exe', '.appimage', '.dmg', '.deb', '.zip', '.msi'];
+
+function getLauncherPath() {
+    const p = path.join(getUploadsPath(), 'launcher');
+    ensureDir(p);
+    return p;
+}
+
+const launcherStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, getLauncherPath());
+    },
+    filename: (req, file, cb) => {
+        const safeName = sanitizeFilename(file.originalname);
+        cb(null, safeName);
+    }
+});
+
+const launcherUpload = multer({
+    storage: launcherStorage,
+    limits: {
+        fileSize: 500 * 1024 * 1024 // 500MB max
+    },
+    fileFilter: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase();
+        if (LAUNCHER_EXTENSIONS.includes(ext)) {
+            cb(null, true);
+        } else {
+            cb(new Error(`Niedozwolone rozszerzenie pliku. Dozwolone: ${LAUNCHER_EXTENSIONS.join(', ')}`), false);
+        }
+    }
+});
 
 // Trasy 2FA, launcher-versions, maintenance wymagają roli admin
 router.use('/2fa', requireRole('admin'));
@@ -337,7 +379,7 @@ router.get('/launcher-versions', asyncHandler(async (req, res) => {
 
 /**
  * POST /api/admin/launcher-versions
- * Dodaje nową wersję launchera
+ * Dodaje nową wersję launchera (z URL ręcznie)
  */
 router.post('/launcher-versions',
     [
@@ -355,11 +397,28 @@ router.post('/launcher-versions',
             });
         }
 
+        // Sprawdź czy wersja już istnieje
+        if (LauncherVersion.findByVersion(req.body.version)) {
+            return res.status(409).json({
+                success: false,
+                error: `Wersja ${req.body.version} już istnieje`
+            });
+        }
+
         const version = LauncherVersion.create(req.body);
 
         ActivityLog.logAdminAction('launcher_version_add', {
-            version: version.version
+            version: version.version,
+            method: 'url'
         }, getClientIp(req));
+
+        // Powiadom połączone launchery o nowej wersji
+        wsManager.broadcast('launcher_update', {
+            version: version.version,
+            changelog: version.changelog,
+            isRequired: !!version.is_required,
+            downloadUrl: version.download_url
+        }, 'broadcast');
 
         res.status(201).json({
             success: true,
@@ -370,24 +429,139 @@ router.post('/launcher-versions',
 );
 
 /**
+ * POST /api/admin/launcher-versions/upload
+ * Przesyła plik launchera - automatycznie oblicza SHA256, tworzy URL i rekord w bazie
+ * Jeden klik: upload pliku → SHA256 → zapis → publikacja → powiadomienie WS
+ */
+router.post('/launcher-versions/upload',
+    (req, res, next) => {
+        launcherUpload.single('file')(req, res, (err) => {
+            if (err instanceof multer.MulterError) {
+                if (err.code === 'LIMIT_FILE_SIZE') {
+                    return res.status(413).json({
+                        success: false,
+                        error: 'Plik jest zbyt duży (max 500MB)'
+                    });
+                }
+                return res.status(400).json({
+                    success: false,
+                    error: `Błąd uploadu: ${err.message}`
+                });
+            }
+            if (err) {
+                return res.status(400).json({
+                    success: false,
+                    error: err.message
+                });
+            }
+            next();
+        });
+    },
+    asyncHandler(async (req, res) => {
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                error: 'Plik jest wymagany'
+            });
+        }
+
+        const version = req.body.version;
+        if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
+            // Usuń przesłany plik
+            fs.unlinkSync(req.file.path);
+            return res.status(400).json({
+                success: false,
+                error: 'Nieprawidłowy format wersji (wymagany: x.y.z)'
+            });
+        }
+
+        // Sprawdź czy wersja już istnieje
+        if (LauncherVersion.findByVersion(version)) {
+            fs.unlinkSync(req.file.path);
+            return res.status(409).json({
+                success: false,
+                error: `Wersja ${version} już istnieje`
+            });
+        }
+
+        // Oblicz SHA256 automatycznie
+        const fileBuffer = fs.readFileSync(req.file.path);
+        const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+        // Stwórz URL do pobrania
+        const downloadUrl = `/api/download/launcher/${req.file.filename}`;
+
+        // Zapisz w bazie
+        const versionRecord = LauncherVersion.create({
+            version,
+            download_url: downloadUrl,
+            sha256,
+            changelog: req.body.changelog || null,
+            is_required: req.body.is_required === 'true' || req.body.is_required === true ? 1 : 0
+        });
+
+        ActivityLog.logAdminAction('launcher_version_upload', {
+            version: versionRecord.version,
+            filename: req.file.filename,
+            fileSize: req.file.size,
+            sha256,
+            method: 'upload'
+        }, getClientIp(req));
+
+        // Powiadom połączone launchery o nowej wersji przez WebSocket
+        wsManager.broadcast('launcher_update', {
+            version: versionRecord.version,
+            changelog: versionRecord.changelog,
+            isRequired: !!versionRecord.is_required,
+            downloadUrl: versionRecord.download_url
+        }, 'broadcast');
+
+        res.status(201).json({
+            success: true,
+            message: `Wersja ${version} została przesłana i opublikowana`,
+            data: {
+                ...versionRecord,
+                filename: req.file.filename,
+                fileSize: req.file.size,
+                sha256
+            }
+        });
+    })
+);
+
+/**
  * DELETE /api/admin/launcher-versions/:id
- * Usuwa wersję launchera
+ * Usuwa wersję launchera i powiązany plik z dysku
  */
 router.delete('/launcher-versions/:id', asyncHandler(async (req, res) => {
     const versionId = parseInt(req.params.id);
 
-    if (!LauncherVersion.findById(versionId)) {
+    const versionRecord = LauncherVersion.findById(versionId);
+    if (!versionRecord) {
         return res.status(404).json({
             success: false,
             error: 'Wersja nie istnieje'
         });
     }
 
+    // Usuń plik z dysku jeśli był uploadowany lokalnie
+    if (versionRecord.download_url && versionRecord.download_url.startsWith('/api/download/launcher/')) {
+        const filename = versionRecord.download_url.replace('/api/download/launcher/', '');
+        const filePath = path.join(getLauncherPath(), filename);
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+    }
+
     LauncherVersion.delete(versionId);
+
+    ActivityLog.logAdminAction('launcher_version_delete', {
+        version: versionRecord.version
+    }, getClientIp(req));
 
     res.json({
         success: true,
-        message: 'Wersja została usunięta'
+        message: `Wersja ${versionRecord.version} została usunięta`
     });
 }));
 

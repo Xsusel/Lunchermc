@@ -34,6 +34,7 @@ class WebSocketManager {
             PLAYER_COUNT: 'player_count',
             MOD_UPDATE: 'mod_update',
             CONFIG_UPDATE: 'config_update',
+            LAUNCHER_UPDATE: 'launcher_update',
             ANNOUNCEMENT: 'announcement',
             ERROR: 'error'
         };
@@ -341,6 +342,17 @@ class WebSocketManager {
             this.NotificationTypes.MOD_UPDATE,
             { action, mod: modInfo },
             'mods'
+        );
+    }
+
+    /**
+     * Wysyła powiadomienie o nowej wersji launchera
+     */
+    notifyLauncherUpdate(version, changelog, isRequired, downloadUrl) {
+        return this.broadcast(
+            this.NotificationTypes.LAUNCHER_UPDATE,
+            { version, changelog, isRequired, downloadUrl },
+            'broadcast'
         );
     }
 
