@@ -489,8 +489,8 @@ router.post('/launcher-versions/upload',
         const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
         const sha512 = crypto.createHash('sha512').update(fileBuffer).digest('base64');
 
-        // Stwórz URL do pobrania
-        const downloadUrl = `/api/download/launcher/${req.file.filename}`;
+        // URL do pobrania - musi pasować do endpointu /api/launcher/releases/:filename
+        const downloadUrl = `/api/launcher/releases/${req.file.filename}`;
 
         // Zapisz w bazie
         const versionRecord = LauncherVersion.create({
@@ -549,11 +549,15 @@ router.delete('/launcher-versions/:id', asyncHandler(async (req, res) => {
     }
 
     // Usuń plik z dysku jeśli był uploadowany lokalnie
-    if (versionRecord.download_url && versionRecord.download_url.startsWith('/api/download/launcher/')) {
-        const filename = versionRecord.download_url.replace('/api/download/launcher/', '');
-        const filePath = path.join(getLauncherPath(), filename);
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
+    const localPrefixes = ['/api/launcher/releases/', '/api/download/launcher/'];
+    for (const prefix of localPrefixes) {
+        if (versionRecord.download_url && versionRecord.download_url.startsWith(prefix)) {
+            const filename = versionRecord.download_url.replace(prefix, '');
+            const filePath = path.join(getLauncherPath(), filename);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+            break;
         }
     }
 

@@ -307,6 +307,8 @@ app.on('window-all-closed', () => {
 
 let pendingUpdatePath = null;
 let useNativeUpdater = !!autoUpdater;
+let updateCheckInterval = null;
+let updateCheckFailCount = 0;
 
 /**
  * Konfiguruje electron-updater z dynamicznym URL
@@ -330,6 +332,7 @@ function configureAutoUpdater() {
         // Aktualizacja dostępna
         autoUpdater.on('update-available', (info) => {
             console.log('electron-updater: update available', info.version);
+            updateCheckFailCount = 0;
             mainWindow?.webContents.send('update-available', {
                 currentVersion: app.getVersion(),
                 latestVersion: info.version,
@@ -362,6 +365,7 @@ function configureAutoUpdater() {
         // Brak aktualizacji
         autoUpdater.on('update-not-available', () => {
             console.log('electron-updater: no update available');
+            updateCheckFailCount = 0;
             mainWindow?.webContents.send('update-not-available');
         });
 
@@ -377,6 +381,15 @@ function configureAutoUpdater() {
     } catch (e) {
         console.warn('Failed to configure electron-updater:', e.message);
         useNativeUpdater = false;
+    }
+
+    // Uruchom okresowe sprawdzanie aktualizacji (co godzinę)
+    if (!updateCheckInterval) {
+        updateCheckInterval = setInterval(() => {
+            if (store.get('autoUpdate') && process.env.NODE_ENV !== 'development') {
+                checkForUpdates();
+            }
+        }, 60 * 60 * 1000); // 1 godzina
     }
 }
 
@@ -394,6 +407,7 @@ async function checkForUpdates() {
                 url: `${apiUrl}/api/launcher/releases`
             });
             await autoUpdater.checkForUpdates();
+            updateCheckFailCount = 0;
             return;
         } catch (error) {
             console.warn('electron-updater check failed, using custom fallback:', error.message);
@@ -410,6 +424,7 @@ async function checkForUpdates() {
 
         if (response && response.success && response.data && response.data.updateAvailable) {
             console.log(`Update available (custom): ${response.data.latestVersion}`);
+            updateCheckFailCount = 0;
 
             let downloadUrl = response.data.downloadUrl;
             if (downloadUrl && !downloadUrl.startsWith('http')) {
@@ -426,19 +441,26 @@ async function checkForUpdates() {
                 nativeUpdate: false
             });
         } else {
+            updateCheckFailCount = 0;
             mainWindow?.webContents.send('update-not-available');
         }
     } catch (error) {
-        console.error('Update check error:', error);
+        updateCheckFailCount++;
+        console.error(`Update check error (attempt ${updateCheckFailCount}):`, error.message);
     }
 }
 
-// Helper: fetch JSON from URL
+// Helper: fetch JSON from URL (z timeout na socket I response)
 function fetchJson(url) {
     return new Promise((resolve, reject) => {
         const client = url.startsWith('https') ? https : http;
-        client.get(url, { timeout: 10000 }, (res) => {
+        const req = client.get(url, { timeout: 10000 }, (res) => {
             let data = '';
+            // Timeout na odczyt body (30s)
+            res.setTimeout(30000, () => {
+                res.destroy();
+                reject(new Error('Response timeout'));
+            });
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 try {
@@ -447,7 +469,12 @@ function fetchJson(url) {
                     reject(e);
                 }
             });
-        }).on('error', reject);
+        });
+        req.on('error', reject);
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Request timeout'));
+        });
     });
 }
 
@@ -467,12 +494,20 @@ async function downloadUpdateCustom(downloadUrl, sha256, version) {
     return new Promise((resolve, reject) => {
         mainWindow?.webContents.send('update-download-progress', { percent: 0, status: 'Rozpoczynanie pobierania...' });
 
-        const client = downloadUrl.startsWith('https') ? https : http;
+        const makeRequest = (url, redirectCount = 0) => {
+            if (redirectCount > 5) {
+                reject(new Error('Zbyt wiele przekierowań'));
+                return;
+            }
 
-        const makeRequest = (url) => {
-            client.get(url, (res) => {
+            const client = url.startsWith('https') ? https : http;
+            const req = client.get(url, { timeout: 60000 }, (res) => {
                 if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                    makeRequest(res.headers.location);
+                    mainWindow?.webContents.send('update-download-progress', {
+                        percent: 0,
+                        status: 'Przekierowanie...'
+                    });
+                    makeRequest(res.headers.location, redirectCount + 1);
                     return;
                 }
 
@@ -507,8 +542,8 @@ async function downloadUpdateCustom(downloadUrl, sha256, version) {
                     fileStream.close(() => {
                         const fileHash = hash.digest('hex');
                         if (sha256 && fileHash !== sha256) {
-                            fs.unlinkSync(filePath);
-                            reject(new Error('Weryfikacja SHA256 nie powiodła się'));
+                            try { fs.unlinkSync(filePath); } catch (_) {}
+                            reject(new Error(`Weryfikacja SHA256 nie powiodła się (oczekiwano: ${sha256.substring(0, 16)}..., otrzymano: ${fileHash.substring(0, 16)}...)`));
                             return;
                         }
 
@@ -521,7 +556,13 @@ async function downloadUpdateCustom(downloadUrl, sha256, version) {
                     try { fs.unlinkSync(filePath); } catch (_) {}
                     reject(err);
                 });
-            }).on('error', reject);
+            });
+
+            req.on('error', reject);
+            req.on('timeout', () => {
+                req.destroy();
+                reject(new Error('Timeout pobierania (60s)'));
+            });
         };
 
         makeRequest(downloadUrl);
@@ -565,7 +606,9 @@ ipcMain.on('install-update', (event, data) => {
     // Custom fallback: uruchom instalator
     if (pendingUpdatePath && fs.existsSync(pendingUpdatePath)) {
         console.log('Installing update via custom installer...');
-        shell.openPath(pendingUpdatePath);
+        const updatePath = pendingUpdatePath;
+        pendingUpdatePath = null; // Reset po użyciu
+        shell.openPath(updatePath);
         setTimeout(() => app.quit(), 1000);
     }
 });

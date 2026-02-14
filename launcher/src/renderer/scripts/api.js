@@ -39,7 +39,9 @@ class ApiClient {
         try {
             const apiUrl = await window.electronAPI?.getApiUrl();
             if (apiUrl) {
-                this.baseUrl = apiUrl.replace(/\/+$/, '') + '/api';
+                const cleanUrl = apiUrl.replace(/\/+$/, '');
+                // Unikaj podwójnego /api/api - sprawdź czy URL już kończy się na /api
+                this.baseUrl = cleanUrl.endsWith('/api') ? cleanUrl : cleanUrl + '/api';
             }
         } catch (e) {
             console.warn('[API] Failed to load API URL from main process:', e);
@@ -52,7 +54,8 @@ class ApiClient {
      */
     updateBaseUrl(apiUrl) {
         if (apiUrl) {
-            this.baseUrl = apiUrl.replace(/\/+$/, '') + '/api';
+            const cleanUrl = apiUrl.replace(/\/+$/, '');
+            this.baseUrl = cleanUrl.endsWith('/api') ? cleanUrl : cleanUrl + '/api';
             this._apiUrlLoaded = true;
             // Wyczyść cache po zmianie URL
             this.clearCache();

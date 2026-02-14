@@ -523,28 +523,24 @@ router.get('/releases/latest.yml', asyncHandler(async (req, res) => {
         return res.status(404).send('No versions available');
     }
 
-    // electron-updater wymaga sha512 w base64
-    // Jeśli nie mamy sha512, użyj sha256 jako fallback (będzie pominięty)
     const sha512 = latest.sha512 || '';
     const fileSize = latest.file_size || 0;
-
-    // Nazwa pliku - jeśli mamy filename z uploadu, użyj go
-    // W innym przypadku skonstruuj z wersji
     const filename = latest.filename || `XsusLauncher-${latest.version}-x64.exe`;
-
     const releaseDate = latest.created_at || new Date().toISOString();
 
-    // Generuj YAML w formacie electron-updater
-    const yaml = [
+    // Generuj YAML w formacie kompatybilnym z electron-updater (generic provider)
+    const lines = [
         `version: ${latest.version}`,
         `files:`,
-        `  - url: ${filename}`,
-        sha512 ? `    sha512: ${sha512}` : null,
-        fileSize ? `    size: ${fileSize}` : null,
-        `path: ${filename}`,
-        sha512 ? `sha512: ${sha512}` : null,
-        `releaseDate: '${releaseDate}'`,
-    ].filter(Boolean).join('\n') + '\n';
+        `  - url: ${filename}`
+    ];
+    if (sha512) lines.push(`    sha512: ${sha512}`);
+    if (fileSize) lines.push(`    size: ${fileSize}`);
+    lines.push(`path: ${filename}`);
+    if (sha512) lines.push(`sha512: ${sha512}`);
+    lines.push(`releaseDate: '${releaseDate}'`);
+
+    const yaml = lines.join('\n') + '\n';
 
     res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');

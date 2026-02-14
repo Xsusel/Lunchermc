@@ -872,7 +872,8 @@ function initPlayButton() {
 
 async function handlePlay() {
     // Blokada gry gdy wymagana aktualizacja jest dostępna
-    if (pendingUpdate?.isRequired) {
+    // Ale pozwól grać jeśli serwer aktualizacji jest niedostępny (3+ nieudane próby)
+    if (pendingUpdate?.isRequired && pendingUpdate?._updateServerReachable !== false) {
         showUpdateModal(pendingUpdate);
         showToast('Wymagana aktualizacja launchera. Pobierz ją, aby kontynuować.', 'warning');
         return;
@@ -2095,6 +2096,17 @@ function initAutoUpdate() {
         if (elements.btnUpdateNow) {
             elements.btnUpdateNow.disabled = false;
             elements.btnUpdateNow.textContent = 'Spróbuj ponownie';
+        }
+        // Jeśli aktualizacja jest wymagana ale serwer nieosiągalny,
+        // pozwól grać po 3 nieudanych próbach
+        if (pendingUpdate?.isRequired) {
+            pendingUpdate._failCount = (pendingUpdate._failCount || 0) + 1;
+            if (pendingUpdate._failCount >= 3) {
+                pendingUpdate._updateServerReachable = false;
+                showToast('Serwer aktualizacji niedostępny. Możesz grać, ale zaktualizuj jak najszybciej.', 'warning');
+                // Pokaż przycisk "później" nawet dla wymaganej aktualizacji
+                if (elements.btnUpdateLater) elements.btnUpdateLater.style.display = '';
+            }
         }
         showToast(`Błąd aktualizacji: ${data.error}`, 'error');
     });

@@ -243,6 +243,13 @@ function uploadToServer(filePath, version, hashes, changelogText, required) {
 async function main() {
     log('=== XsusLauncher Release Script ===\n');
 
+    // 0. Walidacja tokenu (przed budowaniem żeby nie tracić czasu)
+    if (!ADMIN_TOKEN && !hasFlag('no-upload')) {
+        log('⚠️  Brak LAUNCHER_ADMIN_TOKEN - upload na serwer będzie pominięty.');
+        log('   Ustaw: export LAUNCHER_ADMIN_TOKEN="twoj_token"');
+        log('   Lub dodaj --no-upload aby pominąć upload bez ostrzeżenia.\n');
+    }
+
     // 1. Odczytaj aktualną wersję
     const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf-8'));
     const currentVersion = pkg.version;
