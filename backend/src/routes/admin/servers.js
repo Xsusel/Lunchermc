@@ -170,14 +170,21 @@ router.delete('/servers/:id',
             });
         }
 
+        // Delete server's physical folder recursively
+        const serverPath = getServerPath(id);
+        if (fs.existsSync(serverPath)) {
+            fs.rmSync(serverPath, { recursive: true, force: true });
+        }
+
         ActivityLog.logAdminAction('server_delete', {
             serverId: id,
-            name: deleted.name
+            name: deleted.name,
+            foldersDeleted: true
         }, getClientIp(req));
 
         res.json({
             success: true,
-            message: 'Serwer został usunięty'
+            message: 'Serwer i jego foldery zostały usunięte'
         });
     })
 );
@@ -480,7 +487,7 @@ router.post('/servers/:id/mods/:modId/toggle',
 
 /**
  * POST /api/admin/servers/:id/clear-mods
- * Usuwa wszystkie mody z serwera (czyści przypisania, nie pliki)
+ * Usuwa wszystkie mody z serwera (czyści przypisania + fizyczne pliki z folderu)
  */
 router.post('/servers/:id/clear-mods',
     [param('id').isInt()],
@@ -492,23 +499,33 @@ router.post('/servers/:id/clear-mods',
             return res.status(404).json({ success: false, error: 'Serwer nie znaleziony' });
         }
 
+        // Clear physical mods folder
+        const modsFolder = getServerSubPath(id, 'mods');
+        if (fs.existsSync(modsFolder)) {
+            const files = fs.readdirSync(modsFolder);
+            for (const file of files) {
+                fs.unlinkSync(path.join(modsFolder, file));
+            }
+        }
+
         Server.setMods(id, []);
 
         ActivityLog.logAdminAction('server_mods_clear', {
             serverId: id,
-            serverName: server.name
+            serverName: server.name,
+            filesDeleted: true
         }, getClientIp(req));
 
         res.json({
             success: true,
-            message: `Usunięto wszystkie mody z serwera "${server.name}"`
+            message: `Usunięto wszystkie mody i pliki z serwera "${server.name}"`
         });
     })
 );
 
 /**
  * POST /api/admin/servers/:id/clear-files
- * Usuwa wszystkie pliki z serwera (czyści przypisania, nie fizyczne pliki)
+ * Usuwa wszystkie pliki i mody z serwera (czyści przypisania + fizyczne pliki ze wszystkich folderów)
  */
 router.post('/servers/:id/clear-files',
     [param('id').isInt()],
@@ -520,17 +537,26 @@ router.post('/servers/:id/clear-files',
             return res.status(404).json({ success: false, error: 'Serwer nie znaleziony' });
         }
 
+        // Clear all physical server folders
+        const serverPath = getServerPath(id);
+        if (fs.existsSync(serverPath)) {
+            fs.rmSync(serverPath, { recursive: true, force: true });
+            // Recreate empty folder structure
+            createServerFolders(id);
+        }
+
         Server.setFiles(id, []);
         Server.setMods(id, []);
 
         ActivityLog.logAdminAction('server_files_clear', {
             serverId: id,
-            serverName: server.name
+            serverName: server.name,
+            filesDeleted: true
         }, getClientIp(req));
 
         res.json({
             success: true,
-            message: `Wyczyszczono wszystkie pliki i mody z serwera "${server.name}"`
+            message: `Wyczyszczono wszystkie foldery i dane serwera "${server.name}"`
         });
     })
 );

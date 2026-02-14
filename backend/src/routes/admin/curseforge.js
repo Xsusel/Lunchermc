@@ -9,7 +9,7 @@ import { Mod, ActivityLog, Server } from '../../models/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import {
     calculateSHA256, sanitizeFilename,
-    getModsPath, getServerSubPath, ensureDir, getClientIp, createServerFolders,
+    getServerSubPath, ensureDir, getClientIp, createServerFolders,
 } from '../../utils/helpers.js';
 import {
     searchMods as cfSearchMods,
@@ -159,12 +159,27 @@ router.get('/versions', asyncHandler(async (req, res) => {
 // POST /import-mod - Import a single mod from CurseForge
 // ============================================
 router.post('/import-mod', asyncHandler(async (req, res) => {
-    const { modId, fileId, gameVersion } = req.body;
+    const { modId, fileId, gameVersion, serverId } = req.body;
 
     if (!modId || !fileId) {
         return res.status(400).json({
             success: false,
             error: 'modId and fileId are required',
+        });
+    }
+
+    // Determine target server
+    let targetServer;
+    if (serverId) {
+        targetServer = Server.getById(parseInt(serverId));
+    }
+    if (!targetServer) {
+        targetServer = Server.getDefault();
+    }
+    if (!targetServer) {
+        return res.status(400).json({
+            success: false,
+            error: 'Brak serwera docelowego. Podaj serverId lub utwórz domyślny serwer.',
         });
     }
 
@@ -188,18 +203,21 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
     const fileInfo = filesResult.data.find(f => f.id === parseInt(fileId));
     const fileName = fileInfo ? fileInfo.fileName : `${cfMod.slug}-${fileId}.jar`;
 
-    // 4. Prepare destination
-    const modsPath = getModsPath();
-    ensureDir(modsPath);
+    // 4. Prepare destination in server's mods folder
+    const serverModsPath = getServerSubPath(targetServer.id, 'mods');
+    ensureDir(serverModsPath);
     const safeFilename = sanitizeFilename(fileName);
-    const destPath = path.join(modsPath, safeFilename);
+    const destPath = path.join(serverModsPath, safeFilename);
 
     // 5. Check if mod with same filename already exists
     const existingMod = Mod.findByFilename(safeFilename);
     if (existingMod) {
-        return res.status(409).json({
-            success: false,
-            error: `Mod with filename "${safeFilename}" already exists (id: ${existingMod.id})`,
+        // Just assign to server if not already
+        Server.assignMod(targetServer.id, existingMod.id);
+        return res.json({
+            success: true,
+            message: `Mod "${existingMod.name}" juz istnieje - przypisano do serwera "${targetServer.name}"`,
+            data: existingMod,
         });
     }
 
@@ -217,11 +235,11 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
     const sha256 = await calculateSHA256(destPath);
     const fileSize = buffer.length;
 
-    // 8. Create Mod record in DB
+    // 8. Create Mod record in DB with per-server URL
     const mod = Mod.create({
         name: cfMod.name,
         filename: safeFilename,
-        url: `/api/download/mods/${safeFilename}`,
+        url: `/api/download/servers/${targetServer.id}/mods/${safeFilename}`,
         sha256,
         file_size: fileSize,
         is_required: true,
@@ -233,19 +251,14 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
         curseforge_url: cfMod.links?.websiteUrl || null,
     });
 
-    // 9. Auto-assign to all servers
-    try {
-        const allServers = Server.getAll();
-        for (const server of allServers) {
-            Server.assignMod(server.id, mod.id);
-        }
-    } catch (e) {
-        // Non-critical
-    }
+    // 9. Assign to target server only
+    Server.assignMod(targetServer.id, mod.id);
 
     // 10. Log the action
     ActivityLog.logAdminAction('curseforge_import_mod', {
         modId: mod.id,
+        serverId: targetServer.id,
+        serverName: targetServer.name,
         curseforgeId: modId,
         curseforgeFileId: fileId,
         filename: safeFilename,
@@ -254,7 +267,7 @@ router.post('/import-mod', asyncHandler(async (req, res) => {
 
     res.status(201).json({
         success: true,
-        message: `Mod "${cfMod.name}" imported successfully`,
+        message: `Mod "${cfMod.name}" imported to "${targetServer.name}"`,
         data: mod,
     });
 }));
@@ -398,9 +411,9 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
         console.error('Blad ekstrakcji overrides:', err.message);
     }
 
-    // 6. Download mods from manifest
-    const modsPath = getModsPath();
-    ensureDir(modsPath);
+    // 6. Download mods from manifest - save to per-server folder
+    const serverModsPath = getServerSubPath(targetServer.id, 'mods');
+    ensureDir(serverModsPath);
 
     const results = {
         imported: [],
@@ -502,7 +515,7 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
 
             const arrayBuffer = await downloadResponse.arrayBuffer();
             const buffer = Buffer.from(arrayBuffer);
-            const destPath = path.join(modsPath, safeFilename);
+            const destPath = path.join(serverModsPath, safeFilename);
             fs.writeFileSync(destPath, buffer);
 
             const sha256 = await calculateSHA256(destPath);
@@ -510,7 +523,7 @@ router.post('/import-modpack', asyncHandler(async (req, res) => {
             const newMod = Mod.create({
                 name: depMod.name,
                 filename: safeFilename,
-                url: `/api/download/mods/${safeFilename}`,
+                url: `/api/download/servers/${targetServer.id}/mods/${safeFilename}`,
                 sha256,
                 file_size: buffer.length,
                 is_required: true,

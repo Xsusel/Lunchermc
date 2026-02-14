@@ -8,7 +8,7 @@ import fs from 'fs';
 import { Mod, Skin } from '../models/index.js';
 import { downloadLimiter } from '../middleware/index.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { getModsPath } from '../utils/helpers.js';
+import { getModsPath, getServerSubPath } from '../utils/helpers.js';
 
 const router = Router();
 
@@ -120,6 +120,87 @@ router.head('/mods/:filename', asyncHandler(async (req, res) => {
     }
 
     const filePath = safePath(getModsPath(), filename);
+    if (!filePath || !fs.existsSync(filePath)) {
+        return res.status(404).end();
+    }
+
+    const stat = fs.statSync(filePath);
+
+    res.setHeader('Content-Type', 'application/java-archive');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('X-SHA256', mod.sha256);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.status(200).end();
+}));
+
+/**
+ * GET /api/download/servers/:serverId/mods/:filename
+ * Pobiera plik moda z folderu konkretnego serwera
+ */
+router.get('/servers/:serverId/mods/:filename', asyncHandler(async (req, res) => {
+    const { serverId, filename } = req.params;
+
+    // Sprawdzamy czy mod istnieje w bazie i jest włączony
+    const mod = Mod.findByFilename(filename);
+    if (!mod) {
+        return res.status(404).json({ success: false, error: 'Plik nie istnieje' });
+    }
+    if (!mod.is_enabled) {
+        return res.status(403).json({ success: false, error: 'Plik jest niedostępny' });
+    }
+
+    // Ścieżka do pliku w folderze serwera
+    const serverModsPath = getServerSubPath(parseInt(serverId), 'mods');
+    const filePath = safePath(serverModsPath, filename);
+    if (!filePath) {
+        return res.status(400).json({ success: false, error: 'Nieprawidłowa nazwa pliku' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ success: false, error: 'Plik nie został znaleziony na serwerze' });
+    }
+
+    const stat = fs.statSync(filePath);
+
+    res.setHeader('Content-Type', 'application/java-archive');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-SHA256', mod.sha256);
+
+    const range = req.headers.range;
+    if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        const chunkSize = end - start + 1;
+
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Length', chunkSize);
+        res.status(206);
+
+        const stream = fs.createReadStream(filePath, { start, end });
+        stream.pipe(res);
+    } else {
+        const stream = fs.createReadStream(filePath);
+        stream.pipe(res);
+    }
+}));
+
+/**
+ * HEAD /api/download/servers/:serverId/mods/:filename
+ * Sprawdza informacje o pliku w folderze serwera
+ */
+router.head('/servers/:serverId/mods/:filename', asyncHandler(async (req, res) => {
+    const { serverId, filename } = req.params;
+
+    const mod = Mod.findByFilename(filename);
+    if (!mod || !mod.is_enabled) {
+        return res.status(404).end();
+    }
+
+    const serverModsPath = getServerSubPath(parseInt(serverId), 'mods');
+    const filePath = safePath(serverModsPath, filename);
     if (!filePath || !fs.existsSync(filePath)) {
         return res.status(404).end();
     }

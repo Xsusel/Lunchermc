@@ -12,7 +12,8 @@ import { authenticateAdmin, requireRole } from '../../middleware/index.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import {
     calculateSHA256, sanitizeFilename, isAllowedModFile,
-    getModsPath, ensureDir, getClientIp, formatFileSize, verifyFileSHA256
+    getModsPath, getServerSubPath, ensureDir, getClientIp, formatFileSize, verifyFileSHA256,
+    createServerFolders,
 } from '../../utils/helpers.js';
 
 const router = Router();
@@ -21,16 +22,16 @@ const router = Router();
 router.use('/mods', requireRole('admin'));
 router.use('/mods/*', requireRole('admin'));
 
-// Konfiguracja multer dla uploadu plików
+// Konfiguracja multer - upload do temp, potem przenosimy do folderu serwera
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const modsPath = getModsPath();
-        ensureDir(modsPath);
-        cb(null, modsPath);
+        const tmpPath = path.join(getModsPath(), '..', 'tmp');
+        ensureDir(tmpPath);
+        cb(null, tmpPath);
     },
     filename: (req, file, cb) => {
         const safeName = sanitizeFilename(file.originalname);
-        cb(null, safeName);
+        cb(null, `${Date.now()}_${safeName}`);
     }
 });
 
@@ -67,6 +68,7 @@ router.get('/mods', asyncHandler(async (req, res) => {
 /**
  * POST /api/admin/mods
  * Dodaje nowy mod (przez upload pliku)
+ * Wymaga serverId w body - plik trafia do uploads/servers/{serverId}/mods/
  */
 router.post('/mods',
     upload.single('file'),
@@ -78,29 +80,51 @@ router.post('/mods',
             });
         }
 
-        const { name, description, is_required, mod_type } = req.body;
-        const filePath = req.file.path;
-        const filename = req.file.filename;
+        const { name, description, is_required, mod_type, serverId } = req.body;
+        const tmpPath = req.file.path;
+
+        // Determine target server
+        let targetServer;
+        if (serverId) {
+            targetServer = Server.getById(parseInt(serverId));
+        }
+        if (!targetServer) {
+            targetServer = Server.getDefault();
+        }
+        if (!targetServer) {
+            fs.unlinkSync(tmpPath);
+            return res.status(400).json({
+                success: false,
+                error: 'Brak serwera docelowego. Podaj serverId lub utwórz serwer.'
+            });
+        }
+
+        const safeFilename = sanitizeFilename(req.file.originalname);
 
         // Obliczamy sumę kontrolną
-        const sha256 = await calculateSHA256(filePath);
+        const sha256 = await calculateSHA256(tmpPath);
 
         // Sprawdzamy czy mod już istnieje
-        const existingMod = Mod.findByFilename(filename);
+        const existingMod = Mod.findByFilename(safeFilename);
         if (existingMod) {
-            // Usuwamy przesłany plik
-            fs.unlinkSync(filePath);
+            fs.unlinkSync(tmpPath);
             return res.status(409).json({
                 success: false,
                 error: 'Mod o tej nazwie już istnieje'
             });
         }
 
-        // Tworzymy wpis w bazie
+        // Move file to server's mods folder
+        const serverModsPath = getServerSubPath(targetServer.id, 'mods');
+        ensureDir(serverModsPath);
+        const destPath = path.join(serverModsPath, safeFilename);
+        fs.renameSync(tmpPath, destPath);
+
+        // Tworzymy wpis w bazie z per-server URL
         const mod = Mod.create({
-            name: name || filename.replace(/\.[^.]+$/, ''),
-            filename,
-            url: `/api/download/mods/${filename}`,
+            name: name || safeFilename.replace(/\.[^.]+$/, ''),
+            filename: safeFilename,
+            url: `/api/download/servers/${targetServer.id}/mods/${safeFilename}`,
             sha256,
             file_size: req.file.size,
             is_required: is_required === 'true' || is_required === true,
@@ -108,24 +132,19 @@ router.post('/mods',
             description
         });
 
-        // Auto-przypisz nowy mod do wszystkich serwerów
-        try {
-            const allServers = Server.getAll();
-            for (const server of allServers) {
-                Server.assignMod(server.id, mod.id);
-            }
-        } catch (e) {
-            // Non-critical - ignore
-        }
+        // Assign to target server
+        Server.assignMod(targetServer.id, mod.id);
 
         ActivityLog.logAdminAction('mod_upload', {
             modId: mod.id,
-            filename
+            serverId: targetServer.id,
+            serverName: targetServer.name,
+            filename: safeFilename
         }, getClientIp(req));
 
         res.status(201).json({
             success: true,
-            message: 'Mod został dodany',
+            message: `Mod dodany do serwera "${targetServer.name}"`,
             data: mod
         });
     })
@@ -134,6 +153,7 @@ router.post('/mods',
 /**
  * POST /api/admin/mods/url
  * Dodaje mod przez URL (zewnętrzny link)
+ * Opcjonalny serverId - przypisuje do konkretnego serwera
  */
 router.post('/mods/url',
     [
@@ -152,7 +172,7 @@ router.post('/mods/url',
             });
         }
 
-        const { name, filename, url, sha256, file_size, is_required, mod_type, description } = req.body;
+        const { name, filename, url, sha256, file_size, is_required, mod_type, description, serverId } = req.body;
 
         // Sprawdzamy czy mod już istnieje
         if (Mod.findByFilename(filename)) {
@@ -173,18 +193,23 @@ router.post('/mods/url',
             description
         });
 
-        // Auto-przypisz nowy mod do wszystkich serwerów
-        try {
-            const allServers = Server.getAll();
-            for (const server of allServers) {
-                Server.assignMod(server.id, mod.id);
+        // Assign to specific server or all servers
+        if (serverId) {
+            Server.assignMod(parseInt(serverId), mod.id);
+        } else {
+            try {
+                const allServers = Server.getAll();
+                for (const server of allServers) {
+                    Server.assignMod(server.id, mod.id);
+                }
+            } catch (e) {
+                // Non-critical
             }
-        } catch (e) {
-            // Non-critical - ignore
         }
 
         ActivityLog.logAdminAction('mod_add_url', {
             modId: mod.id,
+            serverId: serverId || 'all',
             filename,
             url
         }, getClientIp(req));
@@ -272,10 +297,21 @@ router.delete('/mods/:id', asyncHandler(async (req, res) => {
     }
 
     // Usuwamy plik jeśli jest lokalny
-    if (mod.url && mod.url.startsWith('/api/download/mods/')) {
-        const filePath = path.join(getModsPath(), mod.filename);
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
+    if (mod.url && mod.url.startsWith('/api/download/')) {
+        // Per-server URL: /api/download/servers/{id}/mods/{filename}
+        const serverMatch = mod.url.match(/\/api\/download\/servers\/(\d+)\/mods\//);
+        if (serverMatch) {
+            const srvId = parseInt(serverMatch[1]);
+            const filePath = path.join(getServerSubPath(srvId, 'mods'), mod.filename);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        } else if (mod.url.startsWith('/api/download/mods/')) {
+            // Legacy global path
+            const filePath = path.join(getModsPath(), mod.filename);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
         }
     }
 
