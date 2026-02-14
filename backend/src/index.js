@@ -70,9 +70,10 @@ app.use(helmet({
 }));
 
 // CORS - pozwalamy na żądania z panelu i launchera
+const corsOrigins = [process.env.ADMIN_URL, process.env.API_URL].filter(Boolean);
 app.use(cors({
-    origin: process.env.NODE_ENV === 'production'
-        ? [process.env.ADMIN_URL, process.env.API_URL].filter(Boolean)
+    origin: process.env.NODE_ENV === 'production' && corsOrigins.length > 0
+        ? corsOrigins
         : true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'],
