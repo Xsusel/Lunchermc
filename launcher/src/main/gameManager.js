@@ -416,14 +416,22 @@ class GameManager {
                         if (fs.existsSync(partialPath)) {
                             startByte = fs.statSync(partialPath).size;
                         }
-                        setTimeout(() => attemptDownload(attempt + 1), delay);
+                        setTimeout(() => {
+                            try {
+                                attemptDownload(attempt + 1);
+                            } catch (retryErr) {
+                                reject(retryErr);
+                            }
+                        }, delay);
                     } else {
                         cleanup(true); // Usuń plik po ostatniej próbie
                         reject(new Error(`Failed after ${maxRetries} attempts: ${error.message}`));
                     }
                 };
 
-                const request = protocol.get(fullUrl, options, (response) => {
+                let request;
+                try {
+                    request = protocol.get(fullUrl, options, (response) => {
                     // Obsługa przekierowań
                     if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
                         cleanup(false);
@@ -535,6 +543,12 @@ class GameManager {
                 }, 5000);
 
                 request.on('close', () => clearInterval(stallCheck));
+                } catch (urlErr) {
+                    // Złap ERR_INVALID_URL i inne błędy tworzenia requestu
+                    console.error(`[URL ERROR] ${path.basename(destPath)}: ${urlErr.message} (url: ${fullUrl})`);
+                    try { file.close(); } catch (e) {}
+                    retryOrFail(urlErr);
+                }
             };
 
             attemptDownload(0);
@@ -1392,9 +1406,33 @@ class GameManager {
         // Jeśli URL jest względny (zaczyna się od /), dodaj bazowy URL
         if (url.startsWith('/')) {
             const baseUrl = this.resolveApiUrl();
-            return `${baseUrl}${url}`;
+            const fullUrl = `${baseUrl}${url}`;
+            // Waliduj URL - zamień niebezpieczne znaki na encoded
+            try {
+                new URL(fullUrl);
+                return fullUrl;
+            } catch {
+                // URL zawiera nielegalne znaki (spacje, nawiasy, etc.) - enkoduj ścieżkę
+                try {
+                    const parsed = new URL(baseUrl);
+                    // Enkoduj każdy segment ścieżki zachowując strukturę
+                    const pathParts = url.split('/').map(segment =>
+                        segment ? encodeURIComponent(decodeURIComponent(segment)) : ''
+                    );
+                    parsed.pathname = pathParts.join('/');
+                    return parsed.toString();
+                } catch {
+                    return fullUrl; // Fallback - zwróć jak jest
+                }
+            }
         }
-        return url;
+        // URL zewnętrzny - waliduj
+        try {
+            new URL(url);
+            return url;
+        } catch {
+            return url;
+        }
     }
 
     /**
@@ -1796,10 +1834,12 @@ class GameManager {
                                     current: downloadedCount + 1,
                                     total: filesToDownload.length,
                                     status: 'downloading',
+                                    percent: Math.max(1, Math.round(((downloadedCount) / filesToDownload.length) * 100)),
                                     retry: retry > 0 ? retry : undefined
                                 });
 
                                 await this.downloadAndVerifyFile(file, file.destPath, (bytes, total) => {
+                                    const rawPercent = ((downloadedCount + (total > 0 ? bytes / total : 0)) / filesToDownload.length) * 100;
                                     this.sendThrottledProgress('download-progress', {
                                         type: 'file',
                                         name: file.fileName,
@@ -1808,7 +1848,7 @@ class GameManager {
                                         status: 'downloading',
                                         bytes,
                                         totalBytes: total,
-                                        percent: Math.round(((downloadedCount + (bytes / total)) / filesToDownload.length) * 100)
+                                        percent: Math.max(1, Math.round(rawPercent))
                                     });
                                 });
 

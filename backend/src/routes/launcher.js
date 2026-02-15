@@ -40,11 +40,13 @@ function scanServerFolderFiles(serverId) {
                     const relativePath = path.relative(folderPath, fullPath);
                     const stat = fs.statSync(fullPath);
                     const sha256 = calculateSHA256Sync(fullPath);
+                    // Enkoduj każdy segment ścieżki osobno (zachowaj / jako separator)
+                    const encodedPath = relativePath.split(path.sep).map(s => encodeURIComponent(s)).join('/');
                     files.push({
                         type,
-                        path: `${type}/${relativePath}`,
+                        path: `${type}/${relativePath.split(path.sep).join('/')}`,
                         filename: entry.name,
-                        url: `/api/download/servers/${serverId}/files/${type}/${relativePath}`,
+                        url: `/api/download/servers/${serverId}/files/${type}/${encodedPath}`,
                         sha256,
                         size: stat.size,
                         required: true

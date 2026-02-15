@@ -243,10 +243,26 @@ router.get('/servers/:serverId/files/:type/*', asyncHandler(async (req, res) => 
     const filename = path.basename(filePath);
 
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Accept-Ranges', 'bytes');
 
-    fs.createReadStream(filePath).pipe(res);
+    // Range request support (wznawianie pobierania)
+    const range = req.headers.range;
+    if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        const chunkSize = end - start + 1;
+
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+        res.setHeader('Content-Length', chunkSize);
+        res.status(206);
+
+        fs.createReadStream(filePath, { start, end }).pipe(res);
+    } else {
+        res.setHeader('Content-Length', stat.size);
+        fs.createReadStream(filePath).pipe(res);
+    }
 }));
 
 /**

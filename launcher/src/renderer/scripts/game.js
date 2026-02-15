@@ -56,8 +56,16 @@ class GameLauncher {
             }
 
             if (this.onProgressCallback) {
-                const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
-                this.onProgressCallback(percent, data.name || data.task || 'Pobieranie...', {
+                // Użyj percent z main process (uwzględnia progress wewnątrz pliku),
+                // fallback do prostego current/total
+                const percent = data.percent !== undefined
+                    ? data.percent
+                    : (data.total > 0 ? Math.max(1, Math.round((data.current / data.total) * 100)) : 0);
+                // Pokaż nazwę pliku + licznik (np. "mod.jar (15/3199)")
+                const details = data.total > 1
+                    ? `${data.name || 'Pobieranie...'} (${data.current}/${data.total})`
+                    : (data.name || data.task || 'Pobieranie...');
+                this.onProgressCallback(percent, details, {
                     downloadedBytes: this.downloadStats.downloadedBytes,
                     totalBytes: this.downloadStats.totalBytes,
                     speed: this.downloadStats.speed
