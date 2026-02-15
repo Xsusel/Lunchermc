@@ -39,6 +39,24 @@ function safePath(baseDir, filename) {
 }
 
 /**
+ * Parsuje i waliduje Range header
+ * @param {string} rangeHeader - Wartość Range header
+ * @param {number} fileSize - Rozmiar pliku
+ * @returns {object|null} {start, end, chunkSize} lub null jeśli nieprawidłowy
+ */
+function parseRange(rangeHeader, fileSize) {
+    const parts = rangeHeader.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+    if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
+        return null;
+    }
+
+    return { start, end, chunkSize: end - start + 1 };
+}
+
+/**
  * GET /api/download/mods/:filename
  * Pobiera plik moda
  */
@@ -88,17 +106,18 @@ router.get('/mods/:filename', asyncHandler(async (req, res) => {
     // Obsługujemy zakresowe pobieranie (Range requests)
     const range = req.headers.range;
     if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-        const chunkSize = end - start + 1;
+        const parsed = parseRange(range, stat.size);
+        if (!parsed) {
+            res.setHeader('Content-Range', `bytes */${stat.size}`);
+            return res.status(416).end();
+        }
 
-        res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+        res.setHeader('Content-Range', `bytes ${parsed.start}-${parsed.end}/${stat.size}`);
         res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Content-Length', chunkSize);
+        res.setHeader('Content-Length', parsed.chunkSize);
         res.status(206);
 
-        const stream = fs.createReadStream(filePath, { start, end });
+        const stream = fs.createReadStream(filePath, { start: parsed.start, end: parsed.end });
         stream.pipe(res);
     } else {
         // Standardowe pobieranie
@@ -169,17 +188,18 @@ router.get('/servers/:serverId/mods/:filename', asyncHandler(async (req, res) =>
 
     const range = req.headers.range;
     if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-        const chunkSize = end - start + 1;
+        const parsed = parseRange(range, stat.size);
+        if (!parsed) {
+            res.setHeader('Content-Range', `bytes */${stat.size}`);
+            return res.status(416).end();
+        }
 
-        res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+        res.setHeader('Content-Range', `bytes ${parsed.start}-${parsed.end}/${stat.size}`);
         res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Content-Length', chunkSize);
+        res.setHeader('Content-Length', parsed.chunkSize);
         res.status(206);
 
-        const stream = fs.createReadStream(filePath, { start, end });
+        const stream = fs.createReadStream(filePath, { start: parsed.start, end: parsed.end });
         stream.pipe(res);
     } else {
         const stream = fs.createReadStream(filePath);
@@ -227,11 +247,11 @@ router.get('/servers/:serverId/files/:type/*', asyncHandler(async (req, res) => 
         return res.status(400).json({ success: false, error: 'Nieznany typ pliku' });
     }
 
-    const serverTypePath = getServerSubPath(parseInt(serverId), type);
+    const serverTypePath = path.resolve(getServerSubPath(parseInt(serverId), type));
     const filePath = path.resolve(serverTypePath, relativePath);
 
     // Path traversal protection
-    if (!filePath.startsWith(serverTypePath)) {
+    if (!filePath.startsWith(serverTypePath + path.sep) && filePath !== serverTypePath) {
         return res.status(400).json({ success: false, error: 'Nieprawidłowa ścieżka' });
     }
 
@@ -243,10 +263,27 @@ router.get('/servers/:serverId/files/:type/*', asyncHandler(async (req, res) => 
     const filename = path.basename(filePath);
 
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Accept-Ranges', 'bytes');
 
-    fs.createReadStream(filePath).pipe(res);
+    // Range request support (wznawianie pobierania)
+    const range = req.headers.range;
+    if (range) {
+        const parsed = parseRange(range, stat.size);
+        if (!parsed) {
+            res.setHeader('Content-Range', `bytes */${stat.size}`);
+            return res.status(416).end();
+        }
+
+        res.setHeader('Content-Range', `bytes ${parsed.start}-${parsed.end}/${stat.size}`);
+        res.setHeader('Content-Length', parsed.chunkSize);
+        res.status(206);
+
+        fs.createReadStream(filePath, { start: parsed.start, end: parsed.end }).pipe(res);
+    } else {
+        res.setHeader('Content-Length', stat.size);
+        fs.createReadStream(filePath).pipe(res);
+    }
 }));
 
 /**
@@ -280,16 +317,17 @@ router.get('/launcher/:filename', asyncHandler(async (req, res) => {
     // Obsługujemy zakresowe pobieranie (Range requests) dla resume
     const range = req.headers.range;
     if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-        const chunkSize = end - start + 1;
+        const parsed = parseRange(range, stat.size);
+        if (!parsed) {
+            res.setHeader('Content-Range', `bytes */${stat.size}`);
+            return res.status(416).end();
+        }
 
-        res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
-        res.setHeader('Content-Length', chunkSize);
+        res.setHeader('Content-Range', `bytes ${parsed.start}-${parsed.end}/${stat.size}`);
+        res.setHeader('Content-Length', parsed.chunkSize);
         res.status(206);
 
-        const stream = fs.createReadStream(filePath, { start, end });
+        const stream = fs.createReadStream(filePath, { start: parsed.start, end: parsed.end });
         stream.pipe(res);
     } else {
         res.setHeader('Content-Length', stat.size);

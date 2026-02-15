@@ -541,6 +541,9 @@ async function handleRegister(e) {
         return;
     }
 
+    const submitBtn = elements.registerForm.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+
     try {
         const response = await api.register(username, password, state.captchaId, captchaAnswer);
 
@@ -563,6 +566,8 @@ async function handleRegister(e) {
     } catch (error) {
         showRegisterError(error.message);
         loadCaptcha(); // Reload CAPTCHA after failed attempt
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
     }
 }
 
@@ -706,6 +711,11 @@ async function loadServerConfig() {
  * Aplikuje dane konfiguracyjne serwera do UI
  */
 async function applyServerConfig(data) {
+    if (!data || !data.config) {
+        console.warn('applyServerConfig: brak danych konfiguracji');
+        return;
+    }
+
     state.config = data;
 
     // Aktualizuj UI

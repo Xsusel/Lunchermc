@@ -40,11 +40,13 @@ function scanServerFolderFiles(serverId) {
                     const relativePath = path.relative(folderPath, fullPath);
                     const stat = fs.statSync(fullPath);
                     const sha256 = calculateSHA256Sync(fullPath);
+                    // Enkoduj każdy segment ścieżki osobno (zachowaj / jako separator)
+                    const encodedPath = relativePath.split(path.sep).map(s => encodeURIComponent(s)).join('/');
                     files.push({
                         type,
-                        path: `${type}/${relativePath}`,
+                        path: `${type}/${relativePath.split(path.sep).join('/')}`,
                         filename: entry.name,
-                        url: `/api/download/servers/${serverId}/files/${type}/${relativePath}`,
+                        url: `/api/download/servers/${serverId}/files/${type}/${encodedPath}`,
                         sha256,
                         size: stat.size,
                         required: true
@@ -711,6 +713,11 @@ router.get('/releases/:filename', asyncHandler(async (req, res) => {
         const parts = range.replace(/bytes=/, '').split('-');
         const start = parseInt(parts[0], 10);
         const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+
+        if (isNaN(start) || isNaN(end) || start < 0 || end >= stat.size || start > end) {
+            res.setHeader('Content-Range', `bytes */${stat.size}`);
+            return res.status(416).end();
+        }
 
         res.writeHead(206, {
             'Content-Range': `bytes ${start}-${end}/${stat.size}`,

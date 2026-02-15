@@ -384,6 +384,7 @@ class GameManager {
                 let lastProgressSave = 0;
                 let totalSize = 0;
                 let retried = false; // Guard: zapobiega podwójnemu retry
+                let stallCheck = null; // Deklaracja tutaj - musi być dostępna dla retryOrFail
 
                 const cleanup = (removeFile = true) => {
                     try {
@@ -416,18 +417,27 @@ class GameManager {
                         if (fs.existsSync(partialPath)) {
                             startByte = fs.statSync(partialPath).size;
                         }
-                        setTimeout(() => attemptDownload(attempt + 1), delay);
+                        setTimeout(() => {
+                            try {
+                                attemptDownload(attempt + 1);
+                            } catch (retryErr) {
+                                reject(retryErr);
+                            }
+                        }, delay);
                     } else {
                         cleanup(true); // Usuń plik po ostatniej próbie
                         reject(new Error(`Failed after ${maxRetries} attempts: ${error.message}`));
                     }
                 };
 
-                const request = protocol.get(fullUrl, options, (response) => {
+                let request;
+                try {
+                    request = protocol.get(fullUrl, options, (response) => {
                     // Obsługa przekierowań
                     if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                        clearInterval(stallCheck);
                         cleanup(false);
-                        return this.downloadFileWithResume(response.headers.location, destPath, onProgress, maxRetries - attempt)
+                        return this.downloadFileWithResume(response.headers.location, destPath, onProgress, maxRetries)
                             .then(resolve)
                             .catch(reject);
                     }
@@ -436,6 +446,7 @@ class GameManager {
                     // 200 = OK (serwer nie obsługuje Range, zacznij od nowa)
                     if (response.statusCode === 200 && startByte > 0) {
                         console.log('Server does not support resume, starting from beginning');
+                        clearInterval(stallCheck);
                         startByte = 0;
                         downloadedBytes = 0;
                         cleanup(true);
@@ -487,6 +498,7 @@ class GameManager {
                                     retryOrFail(new Error(`Incomplete download: ${stat.size}/${totalSize} bytes`));
                                 } else {
                                     // Zmień nazwę z .partial na docelową
+                                    clearInterval(stallCheck);
                                     if (fs.existsSync(destPath)) {
                                         fs.unlinkSync(destPath);
                                     }
@@ -498,6 +510,7 @@ class GameManager {
                             } catch (e) {
                                 // Zmień nazwę nawet jeśli nie znamy rozmiaru
                                 try {
+                                    clearInterval(stallCheck);
                                     if (fs.existsSync(destPath)) {
                                         fs.unlinkSync(destPath);
                                     }
@@ -525,7 +538,7 @@ class GameManager {
                 // Sprawdź czy pobieranie się nie zawiesiło
                 // (30s bez danych jeśli coś przyszło, 20s jeśli nic nie przyszło)
                 // retryOrFail ma guard - bezpieczne wywoływanie z wielu źródeł
-                let stallCheck = setInterval(() => {
+                stallCheck = setInterval(() => {
                     const timeSinceProgress = Date.now() - lastProgressTime;
                     if (downloadedBytes > startByte && timeSinceProgress > 30000) {
                         retryOrFail(new Error('Download stalled'));
@@ -535,6 +548,12 @@ class GameManager {
                 }, 5000);
 
                 request.on('close', () => clearInterval(stallCheck));
+                } catch (urlErr) {
+                    // Złap ERR_INVALID_URL i inne błędy tworzenia requestu
+                    console.error(`[URL ERROR] ${path.basename(destPath)}: ${urlErr.message} (url: ${fullUrl})`);
+                    try { file.close(); } catch (e) {}
+                    retryOrFail(urlErr);
+                }
             };
 
             attemptDownload(0);
@@ -1392,9 +1411,33 @@ class GameManager {
         // Jeśli URL jest względny (zaczyna się od /), dodaj bazowy URL
         if (url.startsWith('/')) {
             const baseUrl = this.resolveApiUrl();
-            return `${baseUrl}${url}`;
+            const fullUrl = `${baseUrl}${url}`;
+            // Waliduj URL - zamień niebezpieczne znaki na encoded
+            try {
+                new URL(fullUrl);
+                return fullUrl;
+            } catch {
+                // URL zawiera nielegalne znaki (spacje, nawiasy, etc.) - enkoduj ścieżkę
+                try {
+                    const parsed = new URL(baseUrl);
+                    // Enkoduj każdy segment ścieżki zachowując strukturę
+                    const pathParts = url.split('/').map(segment =>
+                        segment ? encodeURIComponent(decodeURIComponent(segment)) : ''
+                    );
+                    parsed.pathname = pathParts.join('/');
+                    return parsed.toString();
+                } catch {
+                    return fullUrl; // Fallback - zwróć jak jest
+                }
+            }
         }
-        return url;
+        // URL zewnętrzny - waliduj
+        try {
+            new URL(url);
+            return url;
+        } catch {
+            return url;
+        }
     }
 
     /**
@@ -1421,6 +1464,8 @@ class GameManager {
                 const file = fs.createWriteStream(destPath);
                 let downloadedBytes = 0;
                 let lastProgressTime = Date.now();
+                let stallCheck = null; // Musi być dostępna dla retryOrFail
+                let retried = false; // Guard: zapobiega podwójnemu retry
 
                 const cleanup = () => {
                     try {
@@ -1430,21 +1475,34 @@ class GameManager {
                 };
 
                 const retryOrFail = (error) => {
+                    if (retried) return;
+                    retried = true;
+                    clearInterval(stallCheck);
+                    try { request.destroy(); } catch (e) {}
                     cleanup();
                     if (attempt < maxRetries) {
                         const delay = Math.min(1000 * Math.pow(2, attempt), 10000); // Exponential backoff, max 10s
                         console.log(`[RETRY ${attempt + 1}/${maxRetries}] ${path.basename(destPath)} - ${error.message}, waiting ${delay}ms`);
-                        setTimeout(() => attemptDownload(attempt + 1), delay);
+                        setTimeout(() => {
+                            try {
+                                attemptDownload(attempt + 1);
+                            } catch (retryErr) {
+                                reject(retryErr);
+                            }
+                        }, delay);
                     } else {
                         reject(new Error(`Failed after ${maxRetries} attempts: ${error.message}`));
                     }
                 };
 
-                const request = protocol.get(fullUrl, (response) => {
+                let request;
+                try {
+                    request = protocol.get(fullUrl, (response) => {
                     // Obsługa przekierowań
                     if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                        clearInterval(stallCheck);
                         cleanup();
-                        return this.downloadFile(response.headers.location, destPath, onProgress, maxRetries - attempt)
+                        return this.downloadFile(response.headers.location, destPath, onProgress, maxRetries)
                             .then(resolve)
                             .catch(reject);
                     }
@@ -1474,9 +1532,11 @@ class GameManager {
                                 if (totalSize > 0 && stat.size < totalSize * 0.99) {
                                     retryOrFail(new Error(`Incomplete download: ${stat.size}/${totalSize} bytes`));
                                 } else {
+                                    clearInterval(stallCheck);
                                     resolve(destPath);
                                 }
                             } catch (e) {
+                                clearInterval(stallCheck);
                                 resolve(destPath);
                             }
                         });
@@ -1491,20 +1551,21 @@ class GameManager {
                 // Timeout - 2 minuty dla całego pobierania
                 const timeout = 120000;
                 request.setTimeout(timeout, () => {
-                    request.destroy();
                     retryOrFail(new Error('Download timeout'));
                 });
 
                 // Sprawdź czy pobieranie się nie zawiesiło (brak danych przez 30s)
-                const stallCheck = setInterval(() => {
+                stallCheck = setInterval(() => {
                     if (Date.now() - lastProgressTime > 30000 && downloadedBytes > 0) {
-                        clearInterval(stallCheck);
-                        request.destroy();
                         retryOrFail(new Error('Download stalled'));
                     }
                 }, 5000);
 
                 request.on('close', () => clearInterval(stallCheck));
+                } catch (urlErr) {
+                    console.error(`[URL ERROR] ${path.basename(destPath)}: ${urlErr.message} (url: ${fullUrl})`);
+                    retryOrFail(urlErr);
+                }
             };
 
             attemptDownload(0);
@@ -1624,9 +1685,9 @@ class GameManager {
     cleanupOldFiles(files, gamePath) {
         const managedFolders = ['mods', 'config', 'resourcepacks', 'shaderpacks', 'scripts', 'kubejs'];
 
-        // Zbuduj zbiór oczekiwanych ścieżek względnych
+        // Zbuduj zbiór oczekiwanych ścieżek względnych (znormalizowane do /)
         const expectedPaths = new Set(
-            files.map(f => f.path || `mods/${f.filename}`)
+            files.map(f => (f.path || `mods/${f.filename}`).split(path.sep).join('/'))
         );
 
         const removed = [];
@@ -1656,7 +1717,7 @@ class GameManager {
                         // Ignoruj pliki tymczasowe (.partial, .progress)
                         if (entry.name.endsWith('.partial') || entry.name.endsWith('.progress')) continue;
 
-                        const relativePath = path.relative(gamePath, fullPath);
+                        const relativePath = path.relative(gamePath, fullPath).split(path.sep).join('/');
                         if (!expectedPaths.has(relativePath)) {
                             try {
                                 fs.unlinkSync(fullPath);
@@ -1796,10 +1857,12 @@ class GameManager {
                                     current: downloadedCount + 1,
                                     total: filesToDownload.length,
                                     status: 'downloading',
+                                    percent: Math.max(1, Math.round(((downloadedCount) / filesToDownload.length) * 100)),
                                     retry: retry > 0 ? retry : undefined
                                 });
 
                                 await this.downloadAndVerifyFile(file, file.destPath, (bytes, total) => {
+                                    const rawPercent = ((downloadedCount + (total > 0 ? bytes / total : 0)) / filesToDownload.length) * 100;
                                     this.sendThrottledProgress('download-progress', {
                                         type: 'file',
                                         name: file.fileName,
@@ -1808,7 +1871,7 @@ class GameManager {
                                         status: 'downloading',
                                         bytes,
                                         totalBytes: total,
-                                        percent: Math.round(((downloadedCount + (bytes / total)) / filesToDownload.length) * 100)
+                                        percent: Math.max(1, Math.round(rawPercent))
                                     });
                                 });
 
