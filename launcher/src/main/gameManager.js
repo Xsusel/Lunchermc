@@ -1400,10 +1400,21 @@ class GameManager {
      * 3. Domyślny hardcoded URL
      */
     resolveApiUrl() {
+        let url;
         const storeUrl = this.store.get('apiUrl');
-        if (storeUrl && storeUrl.trim()) return storeUrl.trim();
-        if (process.env.API_URL && process.env.API_URL.trim()) return process.env.API_URL.trim();
-        return 'https://mc.xsus.pl';
+        if (storeUrl && storeUrl.trim()) {
+            url = storeUrl.trim();
+        } else if (process.env.API_URL && process.env.API_URL.trim()) {
+            url = process.env.API_URL.trim();
+        } else {
+            return 'https://mc.xsus.pl';
+        }
+        // Usuń trailing /api - plik URL z backendu zaczyna się od /api/download/...
+        url = url.replace(/\/+$/, '');
+        if (url.endsWith('/api')) {
+            url = url.slice(0, -4);
+        }
+        return url;
     }
 
     getFullUrl(url) {
