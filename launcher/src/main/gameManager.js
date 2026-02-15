@@ -384,6 +384,7 @@ class GameManager {
                 let lastProgressSave = 0;
                 let totalSize = 0;
                 let retried = false; // Guard: zapobiega podwójnemu retry
+                let stallCheck = null; // Deklaracja tutaj - musi być dostępna dla retryOrFail
 
                 const cleanup = (removeFile = true) => {
                     try {
@@ -495,6 +496,7 @@ class GameManager {
                                     retryOrFail(new Error(`Incomplete download: ${stat.size}/${totalSize} bytes`));
                                 } else {
                                     // Zmień nazwę z .partial na docelową
+                                    clearInterval(stallCheck);
                                     if (fs.existsSync(destPath)) {
                                         fs.unlinkSync(destPath);
                                     }
@@ -506,6 +508,7 @@ class GameManager {
                             } catch (e) {
                                 // Zmień nazwę nawet jeśli nie znamy rozmiaru
                                 try {
+                                    clearInterval(stallCheck);
                                     if (fs.existsSync(destPath)) {
                                         fs.unlinkSync(destPath);
                                     }
@@ -533,7 +536,7 @@ class GameManager {
                 // Sprawdź czy pobieranie się nie zawiesiło
                 // (30s bez danych jeśli coś przyszło, 20s jeśli nic nie przyszło)
                 // retryOrFail ma guard - bezpieczne wywoływanie z wielu źródeł
-                let stallCheck = setInterval(() => {
+                stallCheck = setInterval(() => {
                     const timeSinceProgress = Date.now() - lastProgressTime;
                     if (downloadedBytes > startByte && timeSinceProgress > 30000) {
                         retryOrFail(new Error('Download stalled'));
@@ -1459,6 +1462,8 @@ class GameManager {
                 const file = fs.createWriteStream(destPath);
                 let downloadedBytes = 0;
                 let lastProgressTime = Date.now();
+                let stallCheck = null; // Musi być dostępna dla retryOrFail
+                let retried = false; // Guard: zapobiega podwójnemu retry
 
                 const cleanup = () => {
                     try {
@@ -1468,17 +1473,29 @@ class GameManager {
                 };
 
                 const retryOrFail = (error) => {
+                    if (retried) return;
+                    retried = true;
+                    clearInterval(stallCheck);
+                    try { request.destroy(); } catch (e) {}
                     cleanup();
                     if (attempt < maxRetries) {
                         const delay = Math.min(1000 * Math.pow(2, attempt), 10000); // Exponential backoff, max 10s
                         console.log(`[RETRY ${attempt + 1}/${maxRetries}] ${path.basename(destPath)} - ${error.message}, waiting ${delay}ms`);
-                        setTimeout(() => attemptDownload(attempt + 1), delay);
+                        setTimeout(() => {
+                            try {
+                                attemptDownload(attempt + 1);
+                            } catch (retryErr) {
+                                reject(retryErr);
+                            }
+                        }, delay);
                     } else {
                         reject(new Error(`Failed after ${maxRetries} attempts: ${error.message}`));
                     }
                 };
 
-                const request = protocol.get(fullUrl, (response) => {
+                let request;
+                try {
+                    request = protocol.get(fullUrl, (response) => {
                     // Obsługa przekierowań
                     if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
                         cleanup();
@@ -1512,9 +1529,11 @@ class GameManager {
                                 if (totalSize > 0 && stat.size < totalSize * 0.99) {
                                     retryOrFail(new Error(`Incomplete download: ${stat.size}/${totalSize} bytes`));
                                 } else {
+                                    clearInterval(stallCheck);
                                     resolve(destPath);
                                 }
                             } catch (e) {
+                                clearInterval(stallCheck);
                                 resolve(destPath);
                             }
                         });
@@ -1529,20 +1548,21 @@ class GameManager {
                 // Timeout - 2 minuty dla całego pobierania
                 const timeout = 120000;
                 request.setTimeout(timeout, () => {
-                    request.destroy();
                     retryOrFail(new Error('Download timeout'));
                 });
 
                 // Sprawdź czy pobieranie się nie zawiesiło (brak danych przez 30s)
-                const stallCheck = setInterval(() => {
+                stallCheck = setInterval(() => {
                     if (Date.now() - lastProgressTime > 30000 && downloadedBytes > 0) {
-                        clearInterval(stallCheck);
-                        request.destroy();
                         retryOrFail(new Error('Download stalled'));
                     }
                 }, 5000);
 
                 request.on('close', () => clearInterval(stallCheck));
+                } catch (urlErr) {
+                    console.error(`[URL ERROR] ${path.basename(destPath)}: ${urlErr.message} (url: ${fullUrl})`);
+                    retryOrFail(urlErr);
+                }
             };
 
             attemptDownload(0);
