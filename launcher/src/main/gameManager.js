@@ -435,8 +435,9 @@ class GameManager {
                     request = protocol.get(fullUrl, options, (response) => {
                     // Obsługa przekierowań
                     if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                        clearInterval(stallCheck);
                         cleanup(false);
-                        return this.downloadFileWithResume(response.headers.location, destPath, onProgress, maxRetries - attempt)
+                        return this.downloadFileWithResume(response.headers.location, destPath, onProgress, maxRetries)
                             .then(resolve)
                             .catch(reject);
                     }
@@ -445,6 +446,7 @@ class GameManager {
                     // 200 = OK (serwer nie obsługuje Range, zacznij od nowa)
                     if (response.statusCode === 200 && startByte > 0) {
                         console.log('Server does not support resume, starting from beginning');
+                        clearInterval(stallCheck);
                         startByte = 0;
                         downloadedBytes = 0;
                         cleanup(true);
@@ -1498,8 +1500,9 @@ class GameManager {
                     request = protocol.get(fullUrl, (response) => {
                     // Obsługa przekierowań
                     if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                        clearInterval(stallCheck);
                         cleanup();
-                        return this.downloadFile(response.headers.location, destPath, onProgress, maxRetries - attempt)
+                        return this.downloadFile(response.headers.location, destPath, onProgress, maxRetries)
                             .then(resolve)
                             .catch(reject);
                     }
@@ -1682,9 +1685,9 @@ class GameManager {
     cleanupOldFiles(files, gamePath) {
         const managedFolders = ['mods', 'config', 'resourcepacks', 'shaderpacks', 'scripts', 'kubejs'];
 
-        // Zbuduj zbiór oczekiwanych ścieżek względnych
+        // Zbuduj zbiór oczekiwanych ścieżek względnych (znormalizowane do /)
         const expectedPaths = new Set(
-            files.map(f => f.path || `mods/${f.filename}`)
+            files.map(f => (f.path || `mods/${f.filename}`).split(path.sep).join('/'))
         );
 
         const removed = [];
@@ -1714,7 +1717,7 @@ class GameManager {
                         // Ignoruj pliki tymczasowe (.partial, .progress)
                         if (entry.name.endsWith('.partial') || entry.name.endsWith('.progress')) continue;
 
-                        const relativePath = path.relative(gamePath, fullPath);
+                        const relativePath = path.relative(gamePath, fullPath).split(path.sep).join('/');
                         if (!expectedPaths.has(relativePath)) {
                             try {
                                 fs.unlinkSync(fullPath);

@@ -714,6 +714,11 @@ router.get('/releases/:filename', asyncHandler(async (req, res) => {
         const start = parseInt(parts[0], 10);
         const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
 
+        if (isNaN(start) || isNaN(end) || start < 0 || end >= stat.size || start > end) {
+            res.setHeader('Content-Range', `bytes */${stat.size}`);
+            return res.status(416).end();
+        }
+
         res.writeHead(206, {
             'Content-Range': `bytes ${start}-${end}/${stat.size}`,
             'Accept-Ranges': 'bytes',
