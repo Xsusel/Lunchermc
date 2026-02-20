@@ -665,7 +665,11 @@ function showRegisterError(message) {
 // ============================================
 async function loadServerConfig() {
     try {
-        const response = await api.getLauncherConfig();
+        // Załaduj zapisany serwer jeśli jeszcze nie ustawiony
+        if (!state.selectedServerId) {
+            state.selectedServerId = await window.electronAPI?.getStore('selectedServerId') || null;
+        }
+        const response = await api.getLauncherConfig(state.selectedServerId);
 
         if (response.success) {
             applyServerConfig(response.data);
@@ -853,6 +857,9 @@ async function selectServer(serverId) {
         state.serverOnline = status.online && !state.config?.config?.maintenanceMode;
     }
     updateUserUI();
+
+    // Przeładuj konfigurację dla wybranego serwera (mods count, version, etc.)
+    loadServerConfig();
 }
 
 /**

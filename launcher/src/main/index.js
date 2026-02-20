@@ -35,10 +35,21 @@ const DEFAULT_API_URL = 'https://mc.xsus.pl';
  * 3. Domyślny hardcoded URL
  */
 function resolveApiUrl() {
+    let url;
     const storeUrl = store.get('apiUrl');
-    if (storeUrl && storeUrl.trim()) return storeUrl.trim();
-    if (process.env.API_URL && process.env.API_URL.trim()) return process.env.API_URL.trim();
-    return DEFAULT_API_URL;
+    if (storeUrl && storeUrl.trim()) {
+        url = storeUrl.trim();
+    } else if (process.env.API_URL && process.env.API_URL.trim()) {
+        url = process.env.API_URL.trim();
+    } else {
+        return DEFAULT_API_URL;
+    }
+    // Usuń trailing /api - ścieżki w kodzie już dodają /api/...
+    url = url.replace(/\/+$/, '');
+    if (url.endsWith('/api')) {
+        url = url.slice(0, -4);
+    }
+    return url;
 }
 
 // Konfiguracja przechowywania ustawień
